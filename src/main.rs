@@ -9,6 +9,8 @@ use types::{Config, Track};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenv::dotenv().ok();
+
     let config = Config::from_env()?;
 
     let spotify = SpotifyClient::new(&config).await?;
