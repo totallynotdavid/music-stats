@@ -1,46 +1,47 @@
-use clap::Parser;
-use dotenv::dotenv;
+mod github;
+mod spotify;
+mod types;
 
-mod config;
+use anyhow::Result;
+use github::GitHubClient;
+use spotify::SpotifyClient;
+use types::{Config, Track};
 
-use config::Config;
+#[tokio::main]
+async fn main() -> Result<()> {
+    let config = Config::from_env()?;
 
-// i had to set specific short forms as it seems to take only the first
-// letter of the env and that was conflicting with others
-#[derive(Parser, Debug)]
-struct Args {
-    #[arg(short = 'g', long, env = "GIST_ID")]
-    gist_id: String,
+    let spotify = SpotifyClient::new(&config).await?;
+    let tracks = spotify.get_top_tracks(10).await?;
 
-    #[arg(short = 't', long, env = "GH_TOKEN")]
-    gh_token: String,
+    let content = format_tracks(&tracks);
 
-    #[arg(short = 'i', long, env = "SPOTIFY_CLIENT_ID")]
-    spotify_client_id: String,
+    let github = GitHubClient::new(&config);
+    github.update_gist(&config.gist_id, content).await?;
 
-    #[arg(short = 's', long, env = "SPOTIFY_CLIENT_SECRET")]
-    spotify_client_secret: String,
-
-    #[arg(short = 'r', long, env = "SPOTIFY_REFRESH_TOKEN")]
-    spotify_refresh_token: String,
+    println!("Successfully updated gist with {} tracks", tracks.len());
+    Ok(())
 }
 
-fn main() {
-    dotenv().ok();
+fn format_tracks(tracks: &[Track]) -> String {
+    let mut content = String::new();
 
-    let args = Args::parse();
+    for (i, track) in tracks.iter().enumerate() {
+        let artists = track
+            .artists
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
 
-    let config = Config {
-        gist_id: args.gist_id,
-        gh_token: args.gh_token,
-        spotify_client_id: args.spotify_client_id,
-        spotify_client_secret: args.spotify_client_secret,
-        spotify_refresh_token: args.spotify_refresh_token,
-    };
+        content.push_str(&format!(
+            "{}. **[{}]({})** by {}\n",
+            i + 1,
+            track.name,
+            track.external_urls.spotify,
+            artists
+        ));
+    }
 
-    println!("Gist ID: {}", config.gist_id);
-    println!("GH Token: {}", config.gh_token);
-    println!("Spotify Client ID: {}", config.spotify_client_id);
-    println!("Spotify Client Secret: {}", config.spotify_client_secret);
-    println!("Spotify Refresh Token: {}", config.spotify_refresh_token);
+    content
 }
