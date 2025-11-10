@@ -1,0 +1,12 @@
+# rust
+/target
+**/*.rs.bk
+
+# environment variables
+.env
+.env.local
+.env.production
+
+# logs
+*.log
+logs/
