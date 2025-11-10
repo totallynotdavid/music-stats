@@ -1,6 +1,7 @@
 mod github;
 mod lastfm;
 mod types;
+mod format;
 
 use anyhow::Result;
 use github::GitHubClient;
@@ -19,7 +20,7 @@ async fn main() -> Result<()> {
     let tracks = lastfm.get_recent_tracks(MAX_TRACKS_TO_FETCH).await?;
     let total_tracks = tracks.len();
 
-    let content = format_tracks(&tracks[..total_tracks.min(TOP_TRACKS_TO_DISPLAY)]);
+    let content = format::format_tracks(&tracks[..total_tracks.min(TOP_TRACKS_TO_DISPLAY)]);
 
     let github = GitHubClient::new(&config);
     github.update_gist(&config.gist_id, content).await?;
@@ -29,13 +30,4 @@ async fn main() -> Result<()> {
         TOP_TRACKS_TO_DISPLAY, total_tracks
     );
     Ok(())
-}
-
-fn format_tracks(tracks: &[types::Track]) -> String {
-    tracks
-        .iter()
-        .enumerate()
-        .map(|(i, t)| format!("{}. {} by {} ({} plays)", i + 1, t.name, t.artist, t.play_count))
-        .collect::<Vec<_>>()
-        .join("\n")
 }

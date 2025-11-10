@@ -27,7 +27,7 @@ impl GitHubClient {
         files.insert("lastfm-recent-tracks".to_string(), GistFile { content });
 
         let update = GistUpdate {
-            description: "🎵 Most listened tracks (last 3 days)".to_string(),
+            description: "🎵 What I've been listening to".to_string(),
             files,
         };
 
