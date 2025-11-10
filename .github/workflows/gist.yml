@@ -10,7 +10,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download and run latest binary
+      - uses: actions/checkout@v5
+
+      - name: Download and run latest release binary
         run: |
           TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName')
           gh release download $TAG --pattern "listening-stats" --clobber
