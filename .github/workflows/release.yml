@@ -16,9 +16,6 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: Strip binary
-        run: strip target/release/listening-stats
-
       - uses: actions/upload-artifact@v5
         with:
           name: listening-stats-linux-x86_64
@@ -27,6 +24,8 @@ jobs:
   create-release:
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
 
