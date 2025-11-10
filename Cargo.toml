@@ -2,7 +2,9 @@
 name = "listening-stats"
 version = "0.1.0"
 edition = "2024"
-authors = ["David Duran"]
+authors = ["David Duran <dadch1404@gmail.com>"]
 license = "MIT"
 
 [dependencies]
+clap = { version = "4.5.51", features = ["derive", "env"] }
+dotenv = "0.15.0"
