@@ -4,13 +4,14 @@ Dependencies: If you're using WSL, install the required system packages the firs
 
 ```bash
 sudo apt update
-sudo apt install pkg-config libssl-dev
+sudo apt-get install gcc # gcc (around 200 mb)
+sudo apt install pkg-config libssl-dev # openssl (around 20 mb in total)
 ```
 
 Then install the Rust dependencies using Cargo:
 
 ```bash
-cargo install
+cargo install --path .
 ```
 
 You'll also need to:
