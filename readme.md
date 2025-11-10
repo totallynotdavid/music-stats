@@ -1,4 +1,4 @@
-# [pkg]: gist (spotify)
+# [pkg]: gist (last.fm)
 
 Dependencies: If you're using WSL, install the required system packages the first time:
 
@@ -17,13 +17,12 @@ cargo install --path .
 You'll also need to:
 
 1. Create a GitHub Gist at https://gist.github.com
-2. Get Spotify credentials from https://developer.spotify.com
+2. Get a Last.fm API key from https://www.last.fm/api
 3. For local development, copy `.env` and fill in your values:
    - `GIST_ID`: Your gist ID (from URL)
    - `GH_TOKEN`: GitHub token with `gist` scope
-   - `SPOTIFY_CLIENT_ID`: From Spotify Dashboard
-   - `SPOTIFY_CLIENT_SECRET`: From Spotify Dashboard
-   - `SPOTIFY_REFRESH_TOKEN`: Use Spotify auth flow to obtain
+   - `LASTFM_API_KEY`: Your Last.fm API key
+   - `LASTFM_USER`: Your Last.fm username
 4. For CI/CD, add the above as secrets to your GitHub repository
 
 To build the project, just run: `cargo build`

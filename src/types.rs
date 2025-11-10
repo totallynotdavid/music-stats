@@ -3,9 +3,8 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub gist_id: String,
     pub gh_token: String,
-    pub spotify_client_id: String,
-    pub spotify_client_secret: String,
-    pub spotify_refresh_token: String,
+    pub lastfm_api_key: String,
+    pub lastfm_user: String,
 }
 
 impl Config {
@@ -13,48 +12,50 @@ impl Config {
         Ok(Self {
             gist_id: env_var("GIST_ID")?,
             gh_token: env_var("GH_TOKEN")?,
-            spotify_client_id: env_var("SPOTIFY_CLIENT_ID")?,
-            spotify_client_secret: env_var("SPOTIFY_CLIENT_SECRET")?,
-            spotify_refresh_token: env_var("SPOTIFY_REFRESH_TOKEN")?,
+            lastfm_api_key: env_var("LASTFM_API_KEY")?,
+            lastfm_user: env_var("LASTFM_USER")?,
         })
     }
 }
 
 fn env_var(key: &str) -> anyhow::Result<String> {
-    std::env::var(key).map_err(|_| anyhow::anyhow!("Missing environment variable: {}", key))
+    std::env::var(key)
+        .map_err(|_| anyhow::anyhow!("Missing environment variable: {}", key))
 }
 
 #[derive(Debug, Deserialize)]
-pub struct TokenResponse {
-    pub access_token: String,
+pub struct LastFmRecentTracksResponse {
+    pub recenttracks: RecentTracks,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct TopTracksResponse {
-    pub items: Vec<Track>,
+pub struct RecentTracks {
+    pub track: Vec<LastFmTrack>,
 }
 
 #[derive(Debug, Deserialize)]
+pub struct LastFmTrack {
+    pub name: String,
+    pub artist: ArtistInfo,
+    pub date: Option<DateInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ArtistInfo {
+    #[serde(rename = "#text")]
+    pub text: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DateInfo {
+    pub uts: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct Track {
     pub name: String,
-    pub artists: Vec<Artist>,
-    pub album: Album,
-    pub external_urls: ExternalUrls,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Artist {
-    pub name: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Album {
-    pub name: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ExternalUrls {
-    pub spotify: String,
+    pub artist: String,
+    pub play_count: usize,
 }
 
 #[derive(Debug, Serialize)]

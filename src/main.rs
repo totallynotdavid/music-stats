@@ -1,49 +1,41 @@
 mod github;
-mod spotify;
+mod lastfm;
 mod types;
 
 use anyhow::Result;
 use github::GitHubClient;
-use spotify::SpotifyClient;
-use types::{Config, Track};
+use lastfm::LastFmClient;
+
+const MAX_TRACKS_TO_FETCH: usize = 200; // limit by the last.fm API
+const TOP_TRACKS_TO_DISPLAY: usize = 5;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv::dotenv().ok();
 
-    let config = Config::from_env()?;
+    let config = types::Config::from_env()?;
 
-    let spotify = SpotifyClient::new(&config).await?;
-    let tracks = spotify.get_top_tracks(10).await?;
+    let lastfm = LastFmClient::new(&config);
+    let tracks = lastfm.get_recent_tracks(MAX_TRACKS_TO_FETCH).await?;
+    let total_tracks = tracks.len();
 
-    let content = format_tracks(&tracks);
+    let content = format_tracks(&tracks[..total_tracks.min(TOP_TRACKS_TO_DISPLAY)]);
 
     let github = GitHubClient::new(&config);
     github.update_gist(&config.gist_id, content).await?;
 
-    println!("Successfully updated gist with {} tracks", tracks.len());
+    println!(
+        "Successfully updated gist with top {} tracks (from {} total)",
+        TOP_TRACKS_TO_DISPLAY, total_tracks
+    );
     Ok(())
 }
 
-fn format_tracks(tracks: &[Track]) -> String {
-    let mut content = String::new();
-
-    for (i, track) in tracks.iter().enumerate() {
-        let artists = track
-            .artists
-            .iter()
-            .map(|a| a.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        content.push_str(&format!(
-            "{}. **[{}]({})** by {}\n",
-            i + 1,
-            track.name,
-            track.external_urls.spotify,
-            artists
-        ));
-    }
-
-    content
+fn format_tracks(tracks: &[types::Track]) -> String {
+    tracks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| format!("{}. {} by {} ({} plays)", i + 1, t.name, t.artist, t.play_count))
+        .collect::<Vec<_>>()
+        .join("\n")
 }

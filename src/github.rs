@@ -3,6 +3,10 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use std::collections::HashMap;
 
+const GITHUB_API_BASE: &str = "https://api.github.com/gists";
+const USER_AGENT: &str = "music-stats/0.1.0";
+const GITHUB_API_VERSION: &str = "2022-11-28";
+
 pub struct GitHubClient {
     client: Client,
     token: String,
@@ -17,13 +21,13 @@ impl GitHubClient {
     }
 
     pub async fn update_gist(&self, gist_id: &str, content: String) -> Result<()> {
-        let url = format!("https://api.github.com/gists/{}", gist_id);
+        let url = format!("{}/{}", GITHUB_API_BASE, gist_id);
 
         let mut files = HashMap::new();
-        files.insert("spotify-top-tracks.md".to_string(), GistFile { content });
+        files.insert("lastfm-recent-tracks".to_string(), GistFile { content });
 
         let update = GistUpdate {
-            description: "🎵 My Top Spotify Tracks (Last 4 Weeks)".to_string(),
+            description: "🎵 Most listened tracks (last 3 days)".to_string(),
             files,
         };
 
@@ -32,7 +36,8 @@ impl GitHubClient {
             .patch(&url)
             .bearer_auth(&self.token)
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("User-Agent", USER_AGENT)
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .json(&update)
             .send()
             .await
