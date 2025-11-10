@@ -10,14 +10,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: update gist
+      - name: Download and run latest binary
+        run: |
+          TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName')
+          gh release download $TAG --pattern "listening-stats" --clobber
+          chmod +x listening-stats
+          ./listening-stats
         env:
           GIST_ID: ${{ secrets.GIST_ID }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
-          LASTFM_USERNAME: ${{ secrets.LASTFM_USERNAME }}
-        run: cargo run --release
+          LASTFM_USER: ${{ secrets.LASTFM_USER }}
