@@ -1,33 +1,34 @@
+mod config;
+mod domain;
+mod format;
 mod github;
 mod lastfm;
-mod types;
-mod format;
 
 use anyhow::Result;
-use github::GitHubClient;
-use lastfm::LastFmClient;
-
-const MAX_TRACKS_TO_FETCH: usize = 200; // limit by the last.fm API
-const TOP_TRACKS_TO_DISPLAY: usize = 5;
+use tracing::info;
+use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv::dotenv().ok();
+    tracing::subscriber::set_global_default(FmtSubscriber::default())?;
 
-    let config = types::Config::from_env()?;
+    let config = config::load_from_env()?;
 
-    let lastfm = LastFmClient::new(&config);
-    let tracks = lastfm.get_recent_tracks(MAX_TRACKS_TO_FETCH).await?;
-    let total_tracks = tracks.len();
-
-    let content = format::format_tracks(&tracks[..total_tracks.min(TOP_TRACKS_TO_DISPLAY)]);
-
-    let github = GitHubClient::new(&config);
-    github.update_gist(&config.gist_id, content).await?;
-
-    println!(
-        "Successfully updated gist with top {} tracks (from {} total)",
-        TOP_TRACKS_TO_DISPLAY, total_tracks
+    info!(
+        "Fetching scrobbles for {} (last {} days)",
+        config.lastfm_user, config.days
     );
+
+    let scrobbles = lastfm::fetch_scrobbles(&config).await?;
+    let mut tracks = domain::aggregate_scrobbles(scrobbles);
+    tracks.truncate(config.top_n);
+
+    info!("Found {} top tracks", tracks.len());
+
+    let content = format::format_tracks(&tracks);
+    github::update_gist(&config, content).await?;
+
+    info!("Gist updated successfully");
     Ok(())
 }
