@@ -1,43 +1,62 @@
-use crate::types::Track;
+use crate::domain::Track;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+const MAX_TITLE_WIDTH: usize = 35;
+const MAX_ARTIST_WIDTH: usize = 25;
+const ALIGN_POSITION: usize = 40;
+
 pub fn format_tracks(tracks: &[Track]) -> String {
-    const MAX_SONG_COLS: usize = 35;
-    const MAX_ARTIST_COLS: usize = 25;
-    const ALIGN_POS: usize = 40;
+    if tracks.is_empty() {
+        return "No tracks played recently".to_string();
+    }
 
     tracks
         .iter()
-        .map(|t| {
-            let song = truncate_display_with_ellipsis(&t.name, MAX_SONG_COLS);
-            let artist = truncate_display_with_ellipsis(&t.artist, MAX_ARTIST_COLS);
-
-            let song_w = UnicodeWidthStr::width(song.as_str());
-            let pad = ALIGN_POS.saturating_sub(song_w);
-            let padding = " ".repeat(pad);
-
-            format!("{}{}{}", song, padding, artist)
-        })
+        .map(format_track)
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-fn truncate_display_with_ellipsis(s: &str, max_width: usize) -> String {
-    if UnicodeWidthStr::width(s) <= max_width {
-        return s.to_string();
+fn format_track(track: &Track) -> String {
+    let title = truncate_with_ellipsis(track.title(), MAX_TITLE_WIDTH);
+    let artist = truncate_with_ellipsis(track.artist(), MAX_ARTIST_WIDTH);
+    let padding = calculate_padding(&title);
+    let count = format_play_count(track.play_count);
+
+    format!("{}{}{}{}", title, padding, artist, count)
+}
+
+fn calculate_padding(title: &str) -> String {
+    let title_width = UnicodeWidthStr::width(title);
+    let padding_size = ALIGN_POSITION.saturating_sub(title_width);
+    " ".repeat(padding_size)
+}
+
+fn format_play_count(count: usize) -> String {
+    if count > 1 {
+        format!(" ({}×)", count)
+    } else {
+        String::new()
+    }
+}
+
+fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_string();
     }
 
-    // reserve 1 column for the ellipsis
-    let mut out = String::new();
-    let mut acc = 0usize;
-    for ch in s.chars() {
-        let w = ch.width().unwrap_or(0);
-        if acc + w + 1 > max_width {
+    let mut result = String::new();
+    let mut width = 0;
+
+    for ch in text.chars() {
+        let char_width = ch.width().unwrap_or(0);
+        if width + char_width + 1 > max_width {
             break;
         }
-        out.push(ch);
-        acc += w;
+        result.push(ch);
+        width += char_width;
     }
-    out.push('…');
-    out
+
+    result.push('…');
+    result
 }

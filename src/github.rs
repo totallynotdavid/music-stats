@@ -1,54 +1,52 @@
-use crate::types::{Config, GistFile, GistUpdate};
+use crate::config::Config;
 use anyhow::{Context, Result};
 use reqwest::Client;
+use serde::Serialize;
 use std::collections::HashMap;
 
-const GITHUB_API_BASE: &str = "https://api.github.com/gists";
-const USER_AGENT: &str = "music-stats/0.1.0";
-const GITHUB_API_VERSION: &str = "2022-11-28";
+pub async fn update_gist(config: &Config, content: String) -> Result<()> {
+    let client = Client::new();
+    let url = format!("https://api.github.com/gists/{}", config.gist_id);
 
-pub struct GitHubClient {
-    client: Client,
-    token: String,
+    let update = build_gist_update(content);
+
+    let response = client
+        .patch(&url)
+        .bearer_auth(&config.gh_token)
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "music-stats/0.1.0")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .json(&update)
+        .send()
+        .await
+        .context("Failed to send gist update request")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("GitHub API error (status {}): {}", status, body);
+    }
+
+    Ok(())
 }
 
-impl GitHubClient {
-    pub fn new(config: &Config) -> Self {
-        Self {
-            client: Client::new(),
-            token: config.gh_token.clone(),
-        }
+fn build_gist_update(content: String) -> GistUpdate {
+    let mut files = HashMap::new();
+    files.insert("lastfm-recent-tracks".to_string(), GistFile { content });
+
+    GistUpdate {
+        description: "🎵 What I've been listening to".to_string(),
+        files,
     }
+}
 
-    pub async fn update_gist(&self, gist_id: &str, content: String) -> Result<()> {
-        let url = format!("{}/{}", GITHUB_API_BASE, gist_id);
+#[derive(Serialize)]
+struct GistUpdate {
+    description: String,
+    files: HashMap<String, GistFile>,
+}
 
-        let mut files = HashMap::new();
-        files.insert("lastfm-recent-tracks".to_string(), GistFile { content });
-
-        let update = GistUpdate {
-            description: "🎵 What I've been listening to".to_string(),
-            files,
-        };
-
-        let response = self
-            .client
-            .patch(&url)
-            .bearer_auth(&self.token)
-            .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", USER_AGENT)
-            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
-            .json(&update)
-            .send()
-            .await
-            .context("Failed to update gist")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("GitHub API error {}: {}", status, text);
-        }
-
-        Ok(())
-    }
+#[derive(Serialize)]
+struct GistFile {
+    content: String,
 }
