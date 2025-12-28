@@ -15,9 +15,9 @@ jobs:
       - name: Download and run latest release binary
         run: |
           TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName')
-          gh release download $TAG --pattern "listening-stats" --clobber
-          chmod +x listening-stats
-          ./listening-stats
+          gh release download $TAG --pattern "music-stats" --clobber
+          chmod +x music-stats
+          ./music-stats
         env:
           GIST_ID: ${{ secrets.GIST_ID }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}

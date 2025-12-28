@@ -1,2 +1,22 @@
 [tools]
-rust = "1.91.0"
+rust = "1.92.0"
+
+[tasks.install]
+description = "Install all dependencies"
+run = "cargo install --path ."
+
+[tasks.build]
+description = "Build the project"
+run = "cargo build"
+
+[tasks.build-release]
+description = "Build the project in release mode"
+run = "cargo build --release"
+
+[tasks.check]
+description = "Format the code & run linter"
+run = ["cargo fmt", "cargo clippy -- -D warnings"]
+
+[tasks.test]
+description = "Run tests"
+run = "cargo test"

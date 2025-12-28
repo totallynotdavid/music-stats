@@ -18,8 +18,8 @@ jobs:
 
       - uses: actions/upload-artifact@v5
         with:
-          name: listening-stats-linux-x86_64
-          path: target/release/listening-stats
+          name: music-stats-linux-x86_64
+          path: target/release/music-stats
 
   create-release:
     needs: release
