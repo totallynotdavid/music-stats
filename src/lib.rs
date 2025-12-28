@@ -1,5 +1,5 @@
 pub mod domain {
-    pub use crate::domain_internal::{aggregate_scrobbles, Scrobble, Track};
+    pub use crate::domain_internal::{aggregate_scrobbles, Scrobble, Track, TrackId};
 }
 
 pub mod format {

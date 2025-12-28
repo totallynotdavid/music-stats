@@ -2,4 +2,5 @@ mod aggregation;
 mod track;
 
 pub use aggregation::aggregate_scrobbles;
-pub use track::{Scrobble, Track};
+#[allow(unused_imports)]
+pub use track::{Scrobble, Track, TrackId};
