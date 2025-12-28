@@ -1,30 +1,66 @@
-# [pkg]: gist (last.fm)
+# [pkg]: last.fm to gist
 
-Dependencies: If you're using WSL, install the required system packages the first time:
+A tool that saves your last.fm listening history to a GitHub Gist. It is written
+in Rust and can run either as a GitHub Action or as a manual script.
+
+Before you start, you will need:
+
+- A last.fm API key from https://www.last.fm/api
+- A public GitHub Gist created at https://gist.github.com (copy the Gist ID from
+  the URL)
+- A GitHub personal access token from
+  https://github.com/settings/personal-access-tokens/new with the Gists
+  permission
+
+To run this as a GitHub Action, create a repository from the template at  
+https://github.com/new?template_name=music-stats&template_owner=totallynotdavid.
+
+Open the repository’s Actions secrets settings at  
+https://github.com/[username]/[repo]/settings/secrets/actions and add:
+
+- `GIST_ID`
+- `GH_TOKEN`
+- `LASTFM_API_KEY`
+- `LASTFM_USER`
+
+The action runs on the schedule defined in `.github/workflows/gist.yml`. Edit
+the cron expression to change the update frequency, or trigger it manually from
+the Actions tab.
+
+To run the tool manually, install the binary with cargo:
+
+```bash
+cargo install --git https://github.com/totallynotdavid/music-stats
+```
+
+Set the required environment variables and run:
+
+```bash
+export GIST_ID=
+export GH_TOKEN=
+export LASTFM_API_KEY=
+export LASTFM_USER=
+music-stats
+```
+
+## Local development
+
+On WSL, install the required system dependencies:
 
 ```bash
 sudo apt update
-sudo apt-get install gcc # gcc (around 200 mb)
-sudo apt install pkg-config libssl-dev # openssl (around 20 mb in total)
+sudo apt install gcc pkg-config libssl-dev # gcc (around 200 mb) / openssl (around 20 mb)
 ```
 
-Then install the Rust dependencies using Cargo:
+Clone the repository and build:
 
 ```bash
-cargo install --path .
+git clone https://github.com/totallynotdavid/music-stats
+cd music-stats
+cargo build
 ```
 
-You'll also need to:
+Copy `.env.example` to `.env` and fill in your credentials.
 
-1. Create a GitHub Gist at https://gist.github.com
-2. Get a Last.fm API key from https://www.last.fm/api
-3. For local development, copy `.env` and fill in your values:
-   - `GIST_ID`: Your gist ID (from URL)
-   - `GH_TOKEN`: GitHub token with `gist` scope
-   - `LASTFM_API_KEY`: Your Last.fm API key
-   - `LASTFM_USER`: Your Last.fm username
-4. For CI/CD, add the above as secrets to your GitHub repository
-
-To build the project, just run: `cargo build`
-
-To run locally: `cargo run` (after setting up .env)
+Run the development build with `cargo run`, or build a release binary with
+`cargo build --release`.
