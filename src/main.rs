@@ -1,34 +1,34 @@
+use tracing_subscriber::EnvFilter;
+
+mod app;
 mod config;
 mod domain;
-mod format;
-mod github;
-mod lastfm;
-
-use anyhow::Result;
-use tracing::info;
-use tracing_subscriber::FmtSubscriber;
+mod errors;
+mod http;
+mod output;
+mod providers;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     dotenv::dotenv().ok();
-    tracing::subscriber::set_global_default(FmtSubscriber::default())?;
+    
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info"))
+        )
+        .init();
 
-    let config = config::load_from_env()?;
+    match run().await {
+        Ok(()) => {}
+        Err(error) => {
+            eprintln!("Error: {}", error);
+            std::process::exit(1);
+        }
+    }
+}
 
-    info!(
-        "Fetching scrobbles for {} (last {} days)",
-        config.lastfm_user, config.days
-    );
-
-    let scrobbles = lastfm::fetch_scrobbles(&config).await?;
-    let mut tracks = domain::aggregate_scrobbles(scrobbles);
-    tracks.truncate(config.top_n);
-
-    info!("Found {} top tracks", tracks.len());
-
-    let content = format::format_tracks(&tracks);
-    github::update_gist(&config, content).await?;
-
-    info!("Gist updated successfully");
-    Ok(())
+async fn run() -> Result<(), errors::Error> {
+    let config = config::load()?;
+    app::run(&config).await
 }
