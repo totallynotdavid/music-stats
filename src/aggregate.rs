@@ -2,6 +2,7 @@ use crate::providers::types::{Scrobble, Track};
 use std::collections::HashMap;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct Statistics {
     pub top_tracks: Vec<(Track, usize)>,
     pub total_plays: usize,
