@@ -37,10 +37,10 @@ fn extract_scrobbles_from_shelves(shelves: &[Value]) -> Result<Vec<Scrobble>, Er
 
             if let Some(contents) = renderer.get("contents").and_then(|v| v.as_array()) {
                 for item in contents {
-                    if let Some(list_item) = item.get("musicResponsiveListItemRenderer") {
-                        if let Some(scrobble) = parse_list_item(list_item, &shelf_date) {
-                            scrobbles.push(scrobble);
-                        }
+                    if let Some(list_item) = item.get("musicResponsiveListItemRenderer")
+                        && let Some(scrobble) = parse_list_item(list_item, &shelf_date)
+                    {
+                        scrobbles.push(scrobble);
                     }
                 }
             }
