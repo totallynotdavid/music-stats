@@ -71,14 +71,15 @@ fn decode_html_entities(input: &str) -> String {
     let mut i = 0;
 
     while i < bytes.len() {
-        if i + 3 < bytes.len() && bytes[i] == b'\\' && bytes[i + 1] == b'x' {
-            if let Ok(hex) = std::str::from_utf8(&bytes[i + 2..i + 4]) {
-                if let Ok(byte_val) = u8::from_str_radix(hex, 16) {
-                    result.push(byte_val as char);
-                    i += 4;
-                    continue;
-                }
-            }
+        if i + 3 < bytes.len()
+            && bytes[i] == b'\\'
+            && bytes[i + 1] == b'x'
+            && let Ok(hex) = std::str::from_utf8(&bytes[i + 2..i + 4])
+            && let Ok(byte_val) = u8::from_str_radix(hex, 16)
+        {
+            result.push(byte_val as char);
+            i += 4;
+            continue;
         }
         result.push(bytes[i] as char);
         i += 1;
