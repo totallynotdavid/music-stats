@@ -45,7 +45,7 @@ async fn fetch_scrobbles(
 ) -> Result<Vec<providers::types::Scrobble>, errors::Error> {
     let mut all_scrobbles = Vec::new();
 
-    if let Some(ref lastfm) = config.provider.lastfm() {
+    if let Some(lastfm) = config.provider.lastfm() {
         let scrobbles = providers::lastfm::fetch_scrobbles(
             client,
             &lastfm.api_key,
@@ -57,7 +57,7 @@ async fn fetch_scrobbles(
         all_scrobbles.extend(scrobbles);
     }
 
-    if let Some(ref cookie) = config.provider.youtube_cookie() {
+    if let Some(cookie) = config.provider.youtube_cookie() {
         let scrobbles = providers::youtube::fetch_scrobbles(client, cookie, config.days).await?;
         tracing::info!("YouTube: {} scrobbles", scrobbles.len());
         all_scrobbles.extend(scrobbles);
