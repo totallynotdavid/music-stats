@@ -31,7 +31,6 @@ async fn fetch_all_pages(
 
     loop {
         let response = fetch_page(client, api_key, username, page, from).await?;
-        let track_count = response.recenttracks.track.len();
         all_tracks.extend(response.recenttracks.track);
 
         let total_pages = response
