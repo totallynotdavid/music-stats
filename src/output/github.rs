@@ -2,52 +2,55 @@ use crate::errors::Error;
 use serde::Serialize;
 use std::collections::HashMap;
 
-pub async fn upload_to_gist(
+const GIST_FILENAME: &str = "lastfm-recent-tracks";
+const GIST_DESCRIPTION: &str = "What I've been listening to";
+
+pub async fn upload_gist(
+    client: &reqwest::Client,
     gist_id: &str,
-    github_token: &str,
+    token: &str,
     content: &str,
 ) -> Result<(), Error> {
-    let client = crate::http::build_client();
     let url = format!("https://api.github.com/gists/{}", gist_id);
-    let update_payload = build_gist_update(content);
-    
-    let http_response = client
+    let payload = build_payload(content);
+
+    let response = client
         .patch(&url)
-        .bearer_auth(github_token)
+        .bearer_auth(token)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
-        .json(&update_payload)
+        .json(&payload)
         .send()
         .await
-        .map_err(|source| Error::Network {
+        .map_err(|e| Error::Network {
             url: url.clone(),
-            source,
+            source: e,
         })?;
-    
-    if !http_response.status().is_success() {
-        let status = http_response.status().as_u16();
-        let body = http_response.text().await.unwrap_or_default();
-        return Err(Error::GistUpdate {
+
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::Gist {
             gist_id: gist_id.to_string(),
             status,
             body,
         });
     }
-    
+
     Ok(())
 }
 
-fn build_gist_update(content: &str) -> GistUpdate {
+fn build_payload(content: &str) -> GistUpdate {
     let mut files = HashMap::new();
     files.insert(
-        "lastfm-recent-tracks".to_string(),
+        GIST_FILENAME.to_string(),
         GistFile {
             content: content.to_string(),
         },
     );
-    
+
     GistUpdate {
-        description: "What I've been listening to".to_string(),
+        description: GIST_DESCRIPTION.to_string(),
         files,
     }
 }
