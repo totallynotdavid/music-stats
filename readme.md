@@ -1,33 +1,46 @@
-# [pkg]: last.fm to gist
+# [pkg]: music stats to gist
 
-A tool that saves your last.fm listening history to a GitHub Gist. It is written
-in Rust and can run either as a GitHub Action or as a manual script.
+Saves your music listening history to a GitHub Gist. Supports Last.fm (which
+aggregates plays from Spotify, Tidal, Deezer, and other services) and YouTube
+Music directly.
 
 Before you start, you will need:
 
-- A last.fm API key from https://www.last.fm/api
 - A public GitHub Gist created at https://gist.github.com (copy the Gist ID from
   the URL)
 - A GitHub personal access token from
   https://github.com/settings/personal-access-tokens/new with the Gists
   permission
+- At least one provider:
+  - Last.fm API key from https://www.last.fm/api and your username
+  - YouTube Music cookie from your browser
 
-To run this as a GitHub Action, create a repository from the template at  
+## Setup
+
+Create a repository from the template at
 https://github.com/new?template_name=music-stats&template_owner=totallynotdavid.
 
-Open the repository’s Actions secrets settings at  
+Open the repository's Actions secrets settings at
 https://github.com/[username]/[repo]/settings/secrets/actions and add:
 
 - `GIST_ID`
-- `GH_TOKEN`
-- `LASTFM_API_KEY`
-- `LASTFM_USER`
+- `GITHUB_TOKEN`
+- At least one provider:
+  - `LASTFM_API_KEY` and `LASTFM_USERNAME`
+  - `YOUTUBE_COOKIE`
 
 The action runs on the schedule defined in `.github/workflows/gist.yml`. Edit
 the cron expression to change the update frequency, or trigger it manually from
 the Actions tab.
 
-To run the tool manually, install the binary with cargo:
+Optional configuration:
+
+- `DAYS`: number of days to fetch (default: 7)
+- `TOP_N`: number of top tracks to show (default: 10)
+
+## Manual usage
+
+Install the binary with cargo:
 
 ```bash
 cargo install --git https://github.com/totallynotdavid/music-stats
@@ -37,10 +50,18 @@ Set the required environment variables and run:
 
 ```bash
 export GIST_ID=
-export GH_TOKEN=
-export LASTFM_API_KEY=
-export LASTFM_USER=
+export GITHUB_TOKEN=
+export LASTFM_API_KEY=       # optional if using YouTube
+export LASTFM_USERNAME=      # optional if using YouTube
+export YOUTUBE_COOKIE=       # optional if using Last.fm
 music-stats
+```
+
+Optional configuration:
+
+```bash
+export DAYS=7                # number of days to fetch (default: 7)
+export TOP_N=10              # number of top tracks to show (default: 10)
 ```
 
 ## Local development
