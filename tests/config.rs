@@ -132,7 +132,7 @@ fn uses_default_top_n() {
     }
 
     let config = load().unwrap();
-    assert_eq!(config.top_n, 10);
+    assert_eq!(config.top_n, 5);
 }
 
 #[test]
