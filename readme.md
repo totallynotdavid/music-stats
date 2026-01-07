@@ -1,4 +1,4 @@
-# [pkg]: music stats to gist
+# [pkg]: music stats archive
 
 Saves your music listening history to a GitHub Gist. Supports Last.fm (which
 aggregates plays from Spotify, Tidal, Deezer, and other services) and YouTube
