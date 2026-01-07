@@ -15,3 +15,6 @@ run = ["cargo fmt -- --check", "cargo clippy -- -D warnings"]
 
 [tasks.test]
 run = "cargo test"
+
+[tasks.fetch-fixtures]
+run = "./scripts/fetch-fixtures.sh"
