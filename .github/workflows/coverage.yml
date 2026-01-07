@@ -20,7 +20,7 @@ jobs:
           rustup update stable
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@ba7c31b66a9387b433c77da64cc4d622b341a338
+        uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Generate code coverage (LCOV)
         run: |
