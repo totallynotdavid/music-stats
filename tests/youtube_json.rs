@@ -1,6 +1,26 @@
 use music_stats::providers::youtube_json::parse_scrobbles;
 
 #[test]
+fn parses_real_youtube_history() {
+    let html = match std::fs::read_to_string("tests/fixtures/history.html") {
+        Ok(content) => content,
+        Err(_) => return,
+    };
+    
+    let json = music_stats::providers::youtube_parse::extract_json_from_html(&html)
+        .expect("Failed to extract JSON from real fixture");
+    
+    let scrobbles = parse_scrobbles(&json).expect("Failed to parse real YouTube response");
+    
+    assert!(!scrobbles.is_empty(), "Expected scrobbles from real history");
+    
+    for scrobble in &scrobbles {
+        assert!(!scrobble.track.title.is_empty(), "Track must have title");
+        assert!(!scrobble.track.artist.is_empty(), "Track must have artist");
+    }
+}
+
+#[test]
 fn parses_minimal_valid_structure() {
     let json = r#"{
         "contents": {
