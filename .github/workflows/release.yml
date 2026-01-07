@@ -41,3 +41,27 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-crates:
+    needs: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment: release
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Rust
+        run: rustup update stable
+
+      - name: Obtain crates.io publish token via OIDC
+        uses: rust-lang/crates-io-auth-action@c261d97c7964bdab86e85d3af092ed8b4cc509d1
+        id: auth
+
+      - name: Publish to crates.io
+        run: |
+          echo "Publishing crate..."
+          CARGO_REGISTRY_TOKEN="${{ steps.auth.outputs.token }}" cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
