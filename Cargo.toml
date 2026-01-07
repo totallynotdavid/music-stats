@@ -3,7 +3,13 @@ name = "music-stats"
 version = "0.2.0"
 edition = "2024"
 authors = ["David Duran <dadch1404@gmail.com>"]
+description = "Saves your music listening history to a GitHub Gist and aggregates plays from Last.fm and YouTube Music."
+keywords = ["music", "lastfm", "youtube", "spotify", "cli"]
 license = "MIT"
+repository = "https://github.com/totallynotdavid/music-stats"
+homepage = "https://github.com/totallynotdavid/music-stats"
+documentation = "https://docs.rs/music-stats"
+readme = "readme.md"
 
 [dependencies]
 anyhow = "1.0.100"
