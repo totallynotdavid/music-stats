@@ -47,7 +47,7 @@ pub fn load() -> Result<Config, Error> {
     let gist_id = require_env("GIST_ID")?;
     let github_token = require_env("GITHUB_TOKEN")?;
     let days = parse_env("DAYS", 7)?;
-    let top_n = parse_env("TOP_N", 10)?;
+    let top_n = parse_env("TOP_N", 5)?;
 
     let provider = load_provider()?;
 

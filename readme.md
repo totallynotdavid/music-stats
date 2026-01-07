@@ -36,7 +36,7 @@ the Actions tab.
 Optional configuration:
 
 - `DAYS`: number of days to fetch (default: 7)
-- `TOP_N`: number of top tracks to show (default: 10)
+- `TOP_N`: number of top tracks to show (default: 5)
 
 ## Manual usage
 
@@ -61,7 +61,7 @@ Optional configuration:
 
 ```bash
 export DAYS=7                # number of days to fetch (default: 7)
-export TOP_N=10              # number of top tracks to show (default: 10)
+export TOP_N=5               # number of top tracks to show (default: 5)
 ```
 
 ## Local development
