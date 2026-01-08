@@ -71,9 +71,14 @@ export TOP_N=5               # number of top tracks to show (default: 5)
 
 ## Publishing
 
-This crate supports Trusted Publishing to crates.io using GitHub Actions (OIDC). The repository includes a release workflow that publishes tagged releases (e.g., `v1.0.0`) to crates.io — see `.github/workflows/release.yml`.
+This crate supports Trusted Publishing to crates.io using GitHub Actions (OIDC).
+The repository includes a release workflow that publishes tagged releases (e.g.,
+`v1.0.0`) to crates.io — see `.github/workflows/release.yml`.
 
-**Note:** the *initial* publish requires a crates.io API token (use `cargo publish --token` or set `CARGO_REGISTRY_TOKEN` as a secret); after configuring Trusted Publishing in your crate's settings, subsequent publishes can use the OIDC-based workflow.
+**Note:** the _initial_ publish requires a crates.io API token (use
+`cargo publish --token` or set `CARGO_REGISTRY_TOKEN` as a secret); after
+configuring Trusted Publishing in your crate's settings, subsequent publishes
+can use the OIDC-based workflow.
 
 ## Local development
 
