@@ -45,7 +45,7 @@ impl Provider {
 
 pub fn load() -> Result<Config, Error> {
     let gist_id = require_env("GIST_ID")?;
-    let github_token = require_env("GITHUB_TOKEN")?;
+    let github_token = require_env("GH_TOKEN")?;
     let days = parse_env("DAYS", 7)?;
     let top_n = parse_env("TOP_N", 5)?;
 

@@ -4,7 +4,7 @@ use std::env;
 fn clear_env() {
     unsafe {
         env::remove_var("GIST_ID");
-        env::remove_var("GITHUB_TOKEN");
+        env::remove_var("GH_TOKEN");
         env::remove_var("LASTFM_API_KEY");
         env::remove_var("LASTFM_USERNAME");
         env::remove_var("YOUTUBE_COOKIE");
@@ -16,7 +16,7 @@ fn clear_env() {
 fn set_required_env() {
     unsafe {
         env::set_var("GIST_ID", "test_gist_id");
-        env::set_var("GITHUB_TOKEN", "test_token");
+        env::set_var("GH_TOKEN", "test_token");
     }
 }
 
@@ -24,7 +24,7 @@ fn set_required_env() {
 fn fails_without_gist_id() {
     clear_env();
     unsafe {
-        env::set_var("GITHUB_TOKEN", "token");
+        env::set_var("GH_TOKEN", "token");
         env::set_var("LASTFM_API_KEY", "key");
         env::set_var("LASTFM_USERNAME", "user");
     }
@@ -45,7 +45,7 @@ fn fails_without_github_token() {
 
     let result = load();
     assert!(result.is_err());
-    assert!(format!("{}", result.unwrap_err()).contains("GITHUB_TOKEN"));
+    assert!(format!("{}", result.unwrap_err()).contains("GH_TOKEN"));
 }
 
 #[test]
