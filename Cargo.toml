@@ -1,6 +1,6 @@
 [package]
 name = "music-stats"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 authors = ["David Duran <dadch1404@gmail.com>"]
 description = "Saves your music listening history to a GitHub Gist and aggregates plays from Last.fm and YouTube Music."
