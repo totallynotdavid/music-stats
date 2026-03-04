@@ -56,7 +56,7 @@ jobs:
         run: rustup update stable
 
       - name: Obtain crates.io publish token via OIDC
-        uses: rust-lang/crates-io-auth-action@c261d97c7964bdab86e85d3af092ed8b4cc509d1
+        uses: rust-lang/crates-io-auth-action@3835ef703f60ad2743169f730a9ce4d1c0fad74e
         id: auth
 
       - name: Publish to crates.io
