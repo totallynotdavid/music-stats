@@ -1,6 +1,7 @@
 use crate::errors::Error;
 use regex::Regex;
 use sha1::{Digest, Sha1};
+use std::fmt::Write;
 
 pub async fn fetch_history_page(client: &reqwest::Client, cookie: &str) -> Result<String, Error> {
     let sapisid = extract_sapisid(cookie)?;
@@ -66,5 +67,12 @@ fn sanitize_cookie(cookie: &str) -> String {
 fn sha1_hash(input: &str) -> String {
     let mut hasher = Sha1::new();
     hasher.update(input.as_bytes());
-    format!("{:x}", hasher.finalize())
+    let digest = hasher.finalize();
+    let mut output = String::with_capacity(digest.len() * 2);
+
+    for byte in digest {
+        write!(&mut output, "{:02x}", byte).unwrap();
+    }
+
+    output
 }
