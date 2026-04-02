@@ -13,17 +13,17 @@ readme = "readme.md"
 include = ["src/**", "Cargo.toml", "readme.md", "LICENSE"]
 
 [dependencies]
-anyhow = "1.0.100"
-chrono = { version = "0.4.42", features = ["serde"] }
+anyhow = "1.0.102"
+chrono = { version = "0.4.44", features = ["serde"] }
 dotenv = "0.15.0"
-regex = "1.12.2"
-reqwest = { version = "0.13.1", features = ["json"] }
+regex = "1.12.3"
+reqwest = { version = "0.13.2", features = ["json"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.148"
-sha1 = "0.10.6"
-tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "time"] }
+serde_json = "1.0.149"
+sha1 = "0.11.0"
+tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "time"] }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-width = "0.2.2"
 
 [profile.release]
