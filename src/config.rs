@@ -1,4 +1,5 @@
 use crate::errors::Error;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Config {
@@ -43,13 +44,21 @@ impl Provider {
     }
 }
 
+/// Loads configuration from the process environment.
 pub fn load() -> Result<Config, Error> {
-    let gist_id = require_env("GIST_ID")?;
-    let github_token = require_env("GH_TOKEN")?;
-    let days = parse_env("DAYS", 7)?;
-    let top_n = parse_env("TOP_N", 5)?;
+    let env: HashMap<String, String> = std::env::vars().collect();
+    load_from(&env)
+}
 
-    let provider = load_provider()?;
+/// Loads configuration from an injected source, so tests can supply their own
+/// values instead of mutating process env (which is shared across threads).
+pub fn load_from(env: &HashMap<String, String>) -> Result<Config, Error> {
+    let gist_id = require_env(env, "GIST_ID")?;
+    let github_token = require_env(env, "GH_TOKEN")?;
+    let days = parse_env(env, "DAYS", 7)?;
+    let top_n = parse_env(env, "TOP_N", 5)?;
+
+    let provider = load_provider(env)?;
 
     validate_config(days, top_n)?;
 
@@ -62,11 +71,9 @@ pub fn load() -> Result<Config, Error> {
     })
 }
 
-fn load_provider() -> Result<Provider, Error> {
-    let lastfm = try_load_lastfm();
-    let youtube = std::env::var("YOUTUBE_COOKIE")
-        .ok()
-        .filter(|s| !s.trim().is_empty());
+fn load_provider(env: &HashMap<String, String>) -> Result<Provider, Error> {
+    let lastfm = try_load_lastfm(env);
+    let youtube = lookup_env(env, "YOUTUBE_COOKIE");
 
     match (lastfm, youtube) {
         (Some(lf), Some(yt)) => Ok(Provider::Both {
@@ -79,13 +86,9 @@ fn load_provider() -> Result<Provider, Error> {
     }
 }
 
-fn try_load_lastfm() -> Option<LastFmConfig> {
-    let api_key = std::env::var("LASTFM_API_KEY")
-        .ok()
-        .filter(|s| !s.trim().is_empty());
-    let username = std::env::var("LASTFM_USERNAME")
-        .ok()
-        .filter(|s| !s.trim().is_empty());
+fn try_load_lastfm(env: &HashMap<String, String>) -> Option<LastFmConfig> {
+    let api_key = lookup_env(env, "LASTFM_API_KEY");
+    let username = lookup_env(env, "LASTFM_USERNAME");
 
     match (api_key, username) {
         (Some(key), Some(user)) => Some(LastFmConfig {
@@ -96,30 +99,33 @@ fn try_load_lastfm() -> Option<LastFmConfig> {
     }
 }
 
-fn require_env(key: &str) -> Result<String, Error> {
-    let value = std::env::var(key).map_err(|_| Error::MissingEnvVar {
-        variable: key.to_string(),
-    })?;
-
-    if value.trim().is_empty() {
-        return Err(Error::MissingEnvVar {
-            variable: key.to_string(),
-        });
-    }
-
-    Ok(value)
+fn lookup_env(env: &HashMap<String, String>, key: &str) -> Option<String> {
+    env.get(key)
+        .map(|s| s.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(String::from)
 }
 
-fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> Result<T, Error>
+fn require_env(env: &HashMap<String, String>, key: &str) -> Result<String, Error> {
+    lookup_env(env, key).ok_or_else(|| Error::MissingEnvVar {
+        variable: key.to_string(),
+    })
+}
+
+fn parse_env<T: std::str::FromStr>(
+    env: &HashMap<String, String>,
+    key: &str,
+    default: T,
+) -> Result<T, Error>
 where
     T::Err: std::fmt::Display,
 {
-    match std::env::var(key) {
-        Ok(value) => value.parse().map_err(|e: T::Err| Error::InvalidConfig {
+    match env.get(key) {
+        Some(value) => value.parse().map_err(|e: T::Err| Error::InvalidConfig {
             field: key.to_string(),
             reason: e.to_string(),
         }),
-        Err(_) => Ok(default),
+        None => Ok(default),
     }
 }
 
