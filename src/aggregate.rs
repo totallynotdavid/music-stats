@@ -32,6 +32,6 @@ fn count_plays(scrobbles: &[Scrobble]) -> HashMap<Track, usize> {
 
 fn sort_by_play_count(counts: HashMap<Track, usize>) -> Vec<(Track, usize)> {
     let mut tracks: Vec<(Track, usize)> = counts.into_iter().collect();
-    tracks.sort_by(|a, b| b.1.cmp(&a.1));
+    tracks.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
     tracks
 }
