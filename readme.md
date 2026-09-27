@@ -28,7 +28,7 @@ Open the repository's Actions secrets settings at
 https://github.com/[username]/[repo]/settings/secrets/actions and add:
 
 - `GIST_ID`
-- `GITHUB_TOKEN`
+- `GH_TOKEN`
 - `CODECOV_TOKEN` (optional — required for private repos to upload coverage)
 - At least one provider:
   - `LASTFM_API_KEY` and `LASTFM_USERNAME`
@@ -55,7 +55,7 @@ Set the required environment variables and run:
 
 ```bash
 export GIST_ID=
-export GITHUB_TOKEN=
+export GH_TOKEN=
 export LASTFM_API_KEY=       # optional if using YouTube
 export LASTFM_USERNAME=      # optional if using YouTube
 export YOUTUBE_COOKIE=       # optional if using Last.fm
