@@ -3,19 +3,25 @@ use regex::Regex;
 use sha1::{Digest, Sha1};
 use std::fmt::Write;
 
-pub async fn fetch_history_page(client: &reqwest::Client, cookie: &str) -> Result<String, Error> {
+pub const DEFAULT_BASE_URL: &str = "https://music.youtube.com/history";
+
+pub async fn fetch_history_page(
+    client: &reqwest::Client,
+    base_url: &str,
+    cookie: &str,
+) -> Result<String, Error> {
     let sapisid = extract_sapisid(cookie)?;
     let auth_header = build_auth_header(&sapisid);
     let sanitized_cookie = sanitize_cookie(cookie);
 
     let response = client
-        .get("https://music.youtube.com/history")
+        .get(base_url)
         .header("Cookie", sanitized_cookie)
         .header("Authorization", auth_header)
         .send()
         .await
         .map_err(|e| Error::Network {
-            url: "https://music.youtube.com/history".to_string(),
+            url: base_url.to_string(),
             source: e,
         })?;
 
@@ -27,7 +33,7 @@ pub async fn fetch_history_page(client: &reqwest::Client, cookie: &str) -> Resul
     }
 
     response.text().await.map_err(|e| Error::Network {
-        url: "https://music.youtube.com/history".to_string(),
+        url: base_url.to_string(),
         source: e,
     })
 }

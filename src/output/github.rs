@@ -2,16 +2,19 @@ use crate::errors::Error;
 use serde::Serialize;
 use std::collections::HashMap;
 
+pub const DEFAULT_BASE_URL: &str = "https://api.github.com";
+
 const GIST_FILENAME: &str = "lastfm-recent-tracks";
 const GIST_DESCRIPTION: &str = "What I've been listening to";
 
 pub async fn upload_gist(
     client: &reqwest::Client,
+    base_url: &str,
     gist_id: &str,
     token: &str,
     content: &str,
 ) -> Result<(), Error> {
-    let url = format!("https://api.github.com/gists/{}", gist_id);
+    let url = format!("{}/gists/{}", base_url, gist_id);
     let payload = build_payload(content);
 
     let response = client

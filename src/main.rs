@@ -1,11 +1,6 @@
+use music_stats::{app, config, errors};
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
-
-mod aggregate;
-mod config;
-mod errors;
-mod output;
-mod providers;
 
 #[tokio::main]
 async fn main() {
@@ -27,43 +22,7 @@ async fn run() -> Result<(), errors::Error> {
     let config = config::load()?;
     let client = build_http_client();
 
-    let scrobbles = fetch_scrobbles(&client, &config).await?;
-    tracing::info!("Fetched {} total scrobbles", scrobbles.len());
-
-    let statistics = aggregate::compute_statistics(scrobbles, config.top_n);
-    let formatted = output::format::format_statistics(&statistics);
-
-    output::github::upload_gist(&client, &config.gist_id, &config.github_token, &formatted).await?;
-    tracing::info!("Updated gist successfully");
-
-    Ok(())
-}
-
-async fn fetch_scrobbles(
-    client: &reqwest::Client,
-    config: &config::Config,
-) -> Result<Vec<providers::types::Scrobble>, errors::Error> {
-    let mut all_scrobbles = Vec::new();
-
-    if let Some(lastfm) = config.provider.lastfm() {
-        let scrobbles = providers::lastfm::fetch_scrobbles(
-            client,
-            &lastfm.api_key,
-            &lastfm.username,
-            config.days,
-        )
-        .await?;
-        tracing::info!("Last.fm: {} scrobbles", scrobbles.len());
-        all_scrobbles.extend(scrobbles);
-    }
-
-    if let Some(cookie) = config.provider.youtube_cookie() {
-        let scrobbles = providers::youtube::fetch_scrobbles(client, cookie, config.days).await?;
-        tracing::info!("YouTube: {} scrobbles", scrobbles.len());
-        all_scrobbles.extend(scrobbles);
-    }
-
-    Ok(all_scrobbles)
+    app::run(&client, &config).await
 }
 
 fn build_http_client() -> reqwest::Client {

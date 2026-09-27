@@ -5,23 +5,27 @@ use serde::Deserialize;
 use std::time::Duration;
 use tokio::time::sleep;
 
+pub const DEFAULT_BASE_URL: &str = "https://ws.audioscrobbler.com/2.0/";
+
 const PAGE_LIMIT: usize = 200;
 const MAX_PAGES: usize = 10;
 const RATE_LIMIT_MS: u64 = 200;
 
 pub async fn fetch_scrobbles(
     client: &reqwest::Client,
+    base_url: &str,
     api_key: &str,
     username: &str,
     days: u64,
 ) -> Result<Vec<Scrobble>, Error> {
     let from_timestamp = calculate_timestamp(days);
-    let tracks = fetch_all_pages(client, api_key, username, from_timestamp).await?;
+    let tracks = fetch_all_pages(client, base_url, api_key, username, from_timestamp).await?;
     Ok(tracks.into_iter().filter_map(parse_track).collect())
 }
 
 async fn fetch_all_pages(
     client: &reqwest::Client,
+    base_url: &str,
     api_key: &str,
     username: &str,
     from: u64,
@@ -30,7 +34,7 @@ async fn fetch_all_pages(
     let mut page = 1;
 
     loop {
-        let response = fetch_page(client, api_key, username, page, from).await?;
+        let response = fetch_page(client, base_url, api_key, username, page, from).await?;
         all_tracks.extend(response.recenttracks.track);
 
         let total_pages = response
@@ -39,7 +43,18 @@ async fn fetch_all_pages(
             .and_then(|a| a.total_pages.parse().ok())
             .unwrap_or(1);
 
-        if page >= total_pages || page >= MAX_PAGES {
+        if page >= MAX_PAGES {
+            if total_pages > MAX_PAGES {
+                tracing::warn!(
+                    "Last.fm has {} pages but stopping at MAX_PAGES ({}); some history will be missing",
+                    total_pages,
+                    MAX_PAGES
+                );
+            }
+            break;
+        }
+
+        if page >= total_pages {
             break;
         }
 
@@ -56,14 +71,15 @@ async fn fetch_all_pages(
 
 async fn fetch_page(
     client: &reqwest::Client,
+    base_url: &str,
     api_key: &str,
     username: &str,
     page: usize,
     from: u64,
 ) -> Result<ApiResponse, Error> {
     let url = format!(
-        "https://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks&user={}&api_key={}&limit={}&from={}&page={}&format=json",
-        username, api_key, PAGE_LIMIT, from, page
+        "{}?method=user.getrecenttracks&user={}&api_key={}&limit={}&from={}&page={}&format=json",
+        base_url, username, api_key, PAGE_LIMIT, from, page
     );
 
     let response = client.get(&url).send().await.map_err(|e| Error::Network {

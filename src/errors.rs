@@ -6,6 +6,7 @@ pub enum Error {
         variable: String,
     },
     NoProviders,
+    AllProvidersFailed,
     InvalidConfig {
         field: String,
         reason: String,
@@ -40,6 +41,12 @@ impl fmt::Display for Error {
                 write!(
                     f,
                     "No music providers configured. Set LASTFM_API_KEY+LASTFM_USERNAME or YOUTUBE_COOKIE"
+                )
+            }
+            Error::AllProvidersFailed => {
+                write!(
+                    f,
+                    "All configured music providers failed to fetch scrobbles"
                 )
             }
             Error::InvalidConfig { field, reason } => {

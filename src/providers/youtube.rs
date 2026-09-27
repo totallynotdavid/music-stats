@@ -5,10 +5,11 @@ use chrono::{Duration, Utc};
 
 pub async fn fetch_scrobbles(
     client: &reqwest::Client,
+    base_url: &str,
     cookie: &str,
     days: u64,
 ) -> Result<Vec<Scrobble>, Error> {
-    let html = youtube_http::fetch_history_page(client, cookie).await?;
+    let html = youtube_http::fetch_history_page(client, base_url, cookie).await?;
     let json = youtube_parse::extract_json_from_html(&html)?;
     let scrobbles = youtube_json::parse_scrobbles(&json)?;
     let filtered = filter_by_date(scrobbles, days);
