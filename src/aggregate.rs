@@ -2,7 +2,6 @@ use crate::providers::types::{Scrobble, Track};
 use std::collections::HashMap;
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct Statistics {
     pub top_tracks: Vec<(Track, usize)>,
     pub total_plays: usize,
@@ -32,6 +31,11 @@ fn count_plays(scrobbles: &[Scrobble]) -> HashMap<Track, usize> {
 
 fn sort_by_play_count(counts: HashMap<Track, usize>) -> Vec<(Track, usize)> {
     let mut tracks: Vec<(Track, usize)> = counts.into_iter().collect();
-    tracks.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+    tracks.sort_by(|(a, a_count), (b, b_count)| {
+        b_count
+            .cmp(a_count)
+            .then_with(|| a.artist.cmp(&b.artist))
+            .then_with(|| a.title.cmp(&b.title))
+    });
     tracks
 }

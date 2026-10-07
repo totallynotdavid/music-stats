@@ -88,3 +88,23 @@ fn top_n_larger_than_unique_tracks() {
     assert_eq!(stats.top_tracks.len(), 2);
     assert_eq!(stats.unique_tracks, 2);
 }
+
+#[test]
+fn ties_are_ordered_by_artist_then_title() {
+    let plays = [("B", "x"), ("A", "z"), ("A", "y"), ("C", "a")];
+    let scrobbles: Vec<Scrobble> = plays
+        .iter()
+        .map(|(artist, title)| Scrobble::new(artist.to_string(), title.to_string(), Utc::now()))
+        .collect();
+
+    for _ in 0..20 {
+        let stats = compute_statistics(scrobbles.clone(), 10);
+        let order: Vec<(&str, &str)> = stats
+            .top_tracks
+            .iter()
+            .map(|(t, _)| (t.artist.as_str(), t.title.as_str()))
+            .collect();
+
+        assert_eq!(order, [("A", "y"), ("A", "z"), ("B", "x"), ("C", "a")]);
+    }
+}

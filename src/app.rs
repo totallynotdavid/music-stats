@@ -14,6 +14,11 @@ pub async fn run(client: &reqwest::Client, config: &Config) -> Result<(), Error>
     tracing::info!("Fetched {} total scrobbles", scrobbles.len());
 
     let statistics = aggregate::compute_statistics(scrobbles, config.top_n);
+    tracing::info!(
+        "{} plays, {} unique tracks",
+        statistics.total_plays,
+        statistics.unique_tracks
+    );
     let formatted = output::format::format_statistics(&statistics);
 
     output::github::upload_gist(
