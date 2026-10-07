@@ -17,7 +17,7 @@ pub fn extract_json_from_html(html: &str) -> Result<String, Error> {
     })?;
 
     let js_obj = extract_balanced_json(html, js_obj_start)?;
-    let decoded = decode_html_entities(&js_obj);
+    let decoded = decode_hex_escapes(&js_obj)?;
     let json = extract_data_field(&decoded)?;
     let unescaped = unescape_json(&json);
 
@@ -65,8 +65,10 @@ fn extract_balanced_json(html: &str, start: usize) -> Result<String, Error> {
     })
 }
 
-fn decode_html_entities(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
+/// Replaces each `\xNN` escape with its byte. Escapes can spell out UTF-8
+/// sequences, so bytes are collected first and decoded once at the end.
+fn decode_hex_escapes(input: &str) -> Result<String, Error> {
+    let mut result = Vec::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut i = 0;
 
@@ -77,15 +79,18 @@ fn decode_html_entities(input: &str) -> String {
             && let Ok(hex) = std::str::from_utf8(&bytes[i + 2..i + 4])
             && let Ok(byte_val) = u8::from_str_radix(hex, 16)
         {
-            result.push(byte_val as char);
+            result.push(byte_val);
             i += 4;
             continue;
         }
-        result.push(bytes[i] as char);
+        result.push(bytes[i]);
         i += 1;
     }
 
-    result
+    String::from_utf8(result).map_err(|e| Error::YouTube {
+        stage: "extraction".to_string(),
+        detail: format!("Escapes do not decode to UTF-8: {}", e),
+    })
 }
 
 fn extract_data_field(decoded: &str) -> Result<String, Error> {
