@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 pub const DEFAULT_BASE_URL: &str = "https://api.github.com";
 
-const GIST_FILENAME: &str = "lastfm-recent-tracks";
+const GIST_FILENAME: &str = "music-stats";
 const GIST_DESCRIPTION: &str = "What I've been listening to";
 
 pub async fn upload_gist(

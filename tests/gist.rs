@@ -11,7 +11,7 @@ async fn sends_expected_patch_body_on_success() {
     let expected_body = json!({
         "description": "What I've been listening to",
         "files": {
-            "lastfm-recent-tracks": {
+            "music-stats": {
                 "content": "Song - Artist"
             }
         }
