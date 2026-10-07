@@ -1,11 +1,14 @@
-use music_stats::providers::youtube_json::parse_scrobbles;
+mod common;
+
+use chrono::NaiveDate;
+use common::history_json;
+use music_stats::providers::youtube_json::{parse_scrobbles, parse_scrobbles_on};
+use tracing_test::traced_test;
 
 #[test]
 fn parses_real_youtube_history() {
-    let html = match std::fs::read_to_string("tests/fixtures/history.html") {
-        Ok(content) => content,
-        Err(_) => return,
-    };
+    let html = std::fs::read_to_string("tests/fixtures/history.html")
+        .expect("tracked fixture tests/fixtures/history.html is missing");
 
     let json = music_stats::providers::youtube_parse::extract_json_from_html(&html)
         .expect("Failed to extract JSON from real fixture");
@@ -112,65 +115,57 @@ fn fails_on_missing_expected_structure() {
     assert!(format!("{}", err).contains("Expected structure not found"));
 }
 
-#[test]
-fn handles_today_date_label() {
-    let json = r#"{
-        "contents": {
-            "singleColumnBrowseResultsRenderer": {
-                "tabs": [{
-                    "tabRenderer": {
-                        "content": {
-                            "sectionListRenderer": {
-                                "contents": [{
-                                    "musicShelfRenderer": {
-                                        "title": {"runs": [{"text": "Today"}]},
-                                        "contents": []
-                                    }
-                                }]
-                            }
-                        }
-                    }
-                }]
-            }
-        }
-    }"#;
+fn today() -> NaiveDate {
+    NaiveDate::from_ymd_opt(2024, 3, 20).unwrap()
+}
 
-    let result = parse_scrobbles(json);
-    assert!(result.is_ok());
+fn play_dates(heading: &str) -> Vec<String> {
+    let json = history_json(&[(heading, &[("Song", "Artist")])]).to_string();
+
+    parse_scrobbles_on(&json, today())
+        .unwrap()
+        .iter()
+        .map(|s| s.played_at.to_rfc3339())
+        .collect()
 }
 
 #[test]
-fn handles_localized_date_labels() {
-    let test_labels = vec!["Hoy", "Hoje", "Oggi", "Aujourd'hui"];
-
-    for label in test_labels {
-        let json = format!(
-            r#"{{
-            "contents": {{
-                "singleColumnBrowseResultsRenderer": {{
-                    "tabs": [{{
-                        "tabRenderer": {{
-                            "content": {{
-                                "sectionListRenderer": {{
-                                    "contents": [{{
-                                        "musicShelfRenderer": {{
-                                            "title": {{"runs": [{{"text": "{}"}}]}},
-                                            "contents": []
-                                        }}
-                                    }}]
-                                }}
-                            }}
-                        }}
-                    }}]
-                }}
-            }}
-        }}"#,
-            label
-        );
-
-        let result = parse_scrobbles(&json);
-        assert!(result.is_ok(), "Failed for label: {}", label);
+fn relative_headings_resolve_to_noon_utc() {
+    for label in ["Today", "Hoy", "Hoje", "Oggi", "Aujourd'hui"] {
+        assert_eq!(play_dates(label), ["2024-03-20T12:00:00+00:00"], "{label}");
     }
+    for label in ["Yesterday", "Ayer", "Ontem", "Ieri", "Hier"] {
+        assert_eq!(play_dates(label), ["2024-03-19T12:00:00+00:00"], "{label}");
+    }
+}
+
+#[test]
+fn last_week_heading_resolves_four_days_back() {
+    for label in ["Last week", "Última semana", "Semana passada"] {
+        assert_eq!(play_dates(label), ["2024-03-16T12:00:00+00:00"], "{label}");
+    }
+}
+
+#[test]
+fn iso_date_heading_resolves_to_that_day() {
+    assert_eq!(play_dates("2024-01-15"), ["2024-01-15T12:00:00+00:00"]);
+}
+
+#[test]
+#[traced_test]
+fn warns_about_a_dropped_heading() {
+    assert!(play_dates("March 2024").is_empty());
+    assert!(logs_contain("unrecognized heading"));
+    assert!(logs_contain("March 2024"));
+}
+
+#[test]
+#[traced_test]
+fn empty_unrecognized_heading_is_silent() {
+    let json = history_json(&[("March 2024", &[])]).to_string();
+
+    assert!(parse_scrobbles_on(&json, today()).unwrap().is_empty());
+    assert!(!logs_contain("unrecognized heading"));
 }
 
 #[test]
