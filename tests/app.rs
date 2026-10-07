@@ -1,5 +1,9 @@
+mod common;
+
+use common::{history_json, history_page};
 use music_stats::app::fetch_scrobbles;
 use music_stats::config::{Config, LastFmConfig, Provider};
+use music_stats::errors::Error;
 use serde_json::json;
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -87,4 +91,27 @@ async fn fails_when_both_providers_fail() {
     .await;
 
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn expired_cookie_fails_instead_of_yielding_an_empty_list() {
+    let youtube_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(history_page(&history_json(&[]))))
+        .mount(&youtube_server)
+        .await;
+
+    let mut config = config_with_both();
+    config.provider = Provider::YouTube("__Secure-3PAPISID=abc123; SOCS=CAI".to_string());
+
+    let result = fetch_scrobbles(
+        &reqwest::Client::new(),
+        &config,
+        "http://127.0.0.1:1",
+        &youtube_server.uri(),
+    )
+    .await;
+
+    assert!(matches!(result, Err(Error::AllProvidersFailed)));
 }
