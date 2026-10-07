@@ -120,11 +120,14 @@ fn parse_env<T: std::str::FromStr>(
 where
     T::Err: std::fmt::Display,
 {
-    match env.get(key) {
-        Some(value) => value.parse().map_err(|e: T::Err| Error::InvalidConfig {
-            field: key.to_string(),
-            reason: e.to_string(),
-        }),
+    match lookup_env(env, key) {
+        Some(value) => value
+            .trim()
+            .parse()
+            .map_err(|e: T::Err| Error::InvalidConfig {
+                field: key.to_string(),
+                reason: e.to_string(),
+            }),
         None => Ok(default),
     }
 }

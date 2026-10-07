@@ -191,3 +191,28 @@ fn ignores_partial_lastfm_config() {
     assert!(config.provider.lastfm().is_none());
     assert!(config.provider.youtube_cookie().is_some());
 }
+
+#[test]
+fn blank_days_and_top_n_use_defaults() {
+    let env = with_required(&[
+        ("LASTFM_API_KEY", "key"),
+        ("LASTFM_USERNAME", "user"),
+        ("DAYS", ""),
+        ("TOP_N", "  "),
+    ]);
+
+    let config = load_from(&env).unwrap();
+    assert_eq!(config.days, 7);
+    assert_eq!(config.top_n, 5);
+}
+
+#[test]
+fn parses_days_with_surrounding_whitespace() {
+    let env = with_required(&[
+        ("LASTFM_API_KEY", "key"),
+        ("LASTFM_USERNAME", "user"),
+        ("DAYS", " 30 "),
+    ]);
+
+    assert_eq!(load_from(&env).unwrap().days, 30);
+}
