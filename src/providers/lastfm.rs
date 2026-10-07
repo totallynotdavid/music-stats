@@ -77,15 +77,35 @@ async fn fetch_page(
     page: usize,
     from: u64,
 ) -> Result<ApiResponse, Error> {
-    let url = format!(
-        "{}?method=user.getrecenttracks&user={}&api_key={}&limit={}&from={}&page={}&format=json",
-        base_url, username, api_key, PAGE_LIMIT, from, page
-    );
-
-    let response = client.get(&url).send().await.map_err(|e| Error::Network {
-        url: url.clone(),
-        source: e,
+    let request_url = reqwest::Url::parse_with_params(
+        base_url,
+        &[
+            ("method", "user.getrecenttracks"),
+            ("user", username),
+            ("api_key", api_key),
+            ("limit", &PAGE_LIMIT.to_string()),
+            ("from", &from.to_string()),
+            ("page", &page.to_string()),
+            ("format", "json"),
+        ],
+    )
+    .map_err(|e| Error::InvalidConfig {
+        field: "Last.fm base URL".to_string(),
+        reason: e.to_string(),
     })?;
+
+    // Keep the API key out of errors. The request URL contains the key.
+    // Reqwest errors embed that URL unless it is stripped.
+    let url = base_url.to_string();
+
+    let response = client
+        .get(request_url)
+        .send()
+        .await
+        .map_err(|e| Error::Network {
+            url: url.clone(),
+            source: e.without_url(),
+        })?;
 
     if !response.status().is_success() {
         let status = response.status().as_u16();
@@ -93,10 +113,10 @@ async fn fetch_page(
         return Err(Error::LastFm { status, url, body });
     }
 
-    response
-        .json()
-        .await
-        .map_err(|e| Error::Network { url, source: e })
+    response.json().await.map_err(|e| Error::Network {
+        url,
+        source: e.without_url(),
+    })
 }
 
 fn parse_track(track: ApiTrack) -> Option<Scrobble> {
