@@ -44,6 +44,7 @@ jobs:
 
   publish-crates:
     needs: create-release
+    if: github.repository == 'totallynotdavid/music-stats'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
