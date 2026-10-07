@@ -12,15 +12,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Download and run latest release binary
-        run: |
-          TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName')
-          gh release download $TAG --pattern "music-stats" --clobber
-          chmod +x music-stats
-          ./music-stats
+      - uses: jdx/mise-action@v4.3.0
+
+      - name: Build and run from this repository
+        run: cargo run --release
         env:
           GIST_ID: ${{ secrets.GIST_ID }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           LASTFM_USERNAME: ${{ secrets.LASTFM_USERNAME }}
           YOUTUBE_COOKIE: ${{ secrets.YOUTUBE_COOKIE }}
+          DAYS: ${{ vars.DAYS }}
+          TOP_N: ${{ vars.TOP_N }}
