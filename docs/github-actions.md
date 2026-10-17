@@ -21,6 +21,7 @@ and updates your Gist. You do not need a machine of your own.
    - `GIST_ID`
    - `GH_TOKEN`
    - `LASTFM_API_KEY` and `LASTFM_USERNAME`, or `YOUTUBE_COOKIE`, or both
+
 3. Run the workflow once from the Actions tab: select **update gist**, then
    **Run workflow**.
 

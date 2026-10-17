@@ -7,16 +7,16 @@ variable already set in the environment wins over the same variable in `.env`.
 
 ## Variables
 
-| Variable          | Required      | Default | Meaning                                         |
-| ----------------- | ------------- | ------- | ----------------------------------------------- |
-| `GIST_ID`         | yes           |         | ID of the Gist to update.                       |
-| `GH_TOKEN`        | yes           |         | GitHub token with the Gists permission.         |
+| Variable          | Required               | Default | Meaning                                         |
+| ----------------- | ---------------------- | ------- | ----------------------------------------------- |
+| `GIST_ID`         | yes                    |         | ID of the Gist to update.                       |
+| `GH_TOKEN`        | yes                    |         | GitHub token with the Gists permission.         |
 | `LASTFM_API_KEY`  | with `LASTFM_USERNAME` |         | Last.fm API key.                                |
 | `LASTFM_USERNAME` | with `LASTFM_API_KEY`  |         | Last.fm username.                               |
-| `YOUTUBE_COOKIE`  | see below     |         | Cookie header of a signed-in YouTube Music tab. |
-| `DAYS`            | no            | `7`     | How many days of history to read. At least 1.   |
-| `TOP_N`           | no            | `5`     | How many tracks to list. At least 1.            |
-| `RUST_LOG`        | no            | `info`  | Log level, in the `tracing` filter syntax.      |
+| `YOUTUBE_COOKIE`  | see below              |         | Cookie header of a signed-in YouTube Music tab. |
+| `DAYS`            | no                     | `7`     | How many days of history to read. At least 1.   |
+| `TOP_N`           | no                     | `5`     | How many tracks to list. At least 1.            |
+| `RUST_LOG`        | no                     | `info`  | Log level, in the `tracing` filter syntax.      |
 
 At least one provider must be configured: both Last.fm variables, or
 `YOUTUBE_COOKIE`. A Last.fm provider needs both its variables. If only one is
