@@ -14,7 +14,7 @@ include = ["src/**", "Cargo.toml", "readme.md", "LICENSE"]
 
 [dependencies]
 anyhow = "1.0.104"
-chrono = { version = "0.4.45", features = ["serde"] }
+chrono = "0.4.45"
 dotenvy = "0.15.7"
 regex = "1.13.1"
 reqwest = { version = "0.13.5", features = ["json"] }
