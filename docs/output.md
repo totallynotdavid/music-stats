@@ -8,9 +8,7 @@ request to `https://api.github.com/gists/<GIST_ID>`
   are left alone.
 - The Gist description `What I've been listening to`.
 
-The file name is the same for every provider. Earlier versions wrote
-`lastfm-recent-tracks`. A Gist that has that file keeps it next to the new file.
-Delete it by hand, or create a new Gist.
+The file name is the same for every provider.
 
 ## Format
 
