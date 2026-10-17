@@ -56,7 +56,6 @@ The tests in `tests/` cover one module each and run without network access. The
 ones that call a provider or the Gist use a local `wiremock` server.
 
 `tests/fixtures/` holds a Last.fm response and a YouTube Music history page that
-`scripts/fetch-fixtures.sh` downloaded. `tests/lastfm.rs`,
-`tests/youtube_parse.rs` and `tests/youtube_json.rs` read them, and fail if a
-fixture is missing. [Contributing](../.github/contributing.md) shows how to
-refresh them.
+`scripts/fetch-fixtures.sh` downloaded. `tests/lastfm.rs` and
+`tests/youtube_parse.rs` read them, and fail if a fixture is missing.
+[Contributing](../.github/contributing.md) shows how to refresh them.
