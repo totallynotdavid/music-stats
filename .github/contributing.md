@@ -16,17 +16,16 @@ sudo apt install gcc
 ```
 
 [`mise.toml`](../mise.toml) pins the Rust toolchain, with `rustfmt` and
-`clippy`. With [mise](https://mise.jdx.dev) installed:
+`clippy`, and the other tools the tasks use. With [mise](https://mise.jdx.dev)
+installed:
 
 ```sh
 git clone https://github.com/totallynotdavid/music-stats
 cd music-stats
 mise install
+mise run install
 mise run build
 ```
-
-Without mise, install the toolchain version in `mise.toml` and run
-`cargo build`.
 
 ## Run it
 
@@ -34,32 +33,27 @@ Copy `.env.example` to `.env`, and fill in `GIST_ID`, `GH_TOKEN` and a provider.
 `.env` is ignored by git. Then:
 
 ```sh
-cargo run
+mise run start
 ```
 
-`cargo build --release` builds the optimized binary at
-`target/release/music-stats`. [Configuration](../docs/configuration.md) lists
-every variable.
+`mise run build` builds the optimized binary at `target/release/music-stats`.
+[Configuration](../docs/configuration.md) lists every variable.
 
 ## Check your change
 
-| Task            | mise             | cargo                                                    |
-| --------------- | ---------------- | -------------------------------------------------------- |
-| Format and lint | `mise run check` | `cargo fmt -- --check` and `cargo clippy -- -D warnings` |
-| Test            | `mise run test`  | `cargo test`                                             |
+| Task                                           | Command          |
+| ---------------------------------------------- | ---------------- |
+| Lint: rustfmt, clippy, Markdown, YAML and JSON | `mise run lint`  |
+| Repair what a tool can, and format             | `mise run fix`   |
+| Test                                           | `mise run test`  |
+| Everything [CI](workflows/ci.yml) runs         | `mise run check` |
 
-To format, run `cargo fmt`. Pull requests run both tasks in
-[CI](workflows/ci.yml).
+`mise run check` never writes files. Run `mise run fix` first.
 
 The tests need no credentials and no network. To measure coverage, as
-[`coverage.yml`](workflows/coverage.yml) does:
-
-```sh
-cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
-```
-
-This needs [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov). The
-workflow uploads the report to Codecov, with the `CODECOV_TOKEN` secret.
+[`coverage.yml`](workflows/coverage.yml) does, run `mise run coverage`. It
+writes `lcov.info`. The workflow uploads the report to Codecov, with the
+`CODECOV_TOKEN` secret.
 
 ## Refresh the test fixtures
 
