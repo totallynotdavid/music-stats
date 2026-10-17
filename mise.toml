@@ -1,20 +1,59 @@
 [tools]
-rust = { version = "1.99.0", components = "rustfmt,clippy" }
+rust = { version = "1.99.0", components = "rustfmt,clippy,llvm-tools" }
+"aqua:taiki-e/cargo-llvm-cov" = "0.9.1"
+oxfmt = "0.73.0"
 
 [tasks.install]
-run = "cargo install --path ."
+description = "Fetch the crate dependencies pinned in Cargo.lock"
+run = "cargo fetch --locked"
 
-[tasks.build]
-run = "cargo build"
+[tasks.lint]
+description = "Check Rust formatting, clippy and Markdown, YAML and JSON formatting"
+depends = ["lint:*"]
 
-[tasks.build-release]
-run = "cargo build --release"
+[tasks."lint:rust"]
+description = "Check rustfmt formatting and run clippy with warnings denied"
+run = [
+  "cargo fmt --check",
+  "cargo clippy --locked --all-targets -- -D warnings",
+]
 
-[tasks.check]
-run = ["cargo fmt -- --check", "cargo clippy -- -D warnings"]
+[tasks."lint:docs"]
+description = "Check Markdown, YAML and JSON formatting with oxfmt"
+run = "oxfmt --check ."
+
+[tasks.fix]
+description = "Apply safe clippy fixes and format Rust, Markdown, YAML and JSON"
+run = [
+  "cargo clippy --locked --all-targets --fix --allow-dirty --allow-staged",
+  "cargo fmt",
+  "oxfmt .",
+]
 
 [tasks.test]
-run = "cargo test"
+description = "Run the offline test suite"
+run = "cargo test --locked"
+
+[tasks.build]
+description = "Build the optimized binary at target/release/music-stats"
+run = "cargo build --release --locked"
+
+[tasks.check]
+description = "Run every check CI runs: lint, test and build"
+depends = ["lint", "test", "build"]
+
+[tasks.start]
+description = "Run music-stats from this checkout with the settings in .env"
+run = "cargo run --release --locked"
+
+[tasks.coverage]
+description = "Write test coverage to lcov.info"
+run = "cargo llvm-cov --locked --all-features --workspace --lcov --output-path lcov.info"
+
+[tasks.publish]
+description = "Publish the crate to crates.io (needs CARGO_REGISTRY_TOKEN)"
+run = "cargo publish --locked"
 
 [tasks.fetch-fixtures]
+description = "Refresh tests/fixtures from the live Last.fm and YouTube Music services"
 run = "./scripts/fetch-fixtures.sh"
