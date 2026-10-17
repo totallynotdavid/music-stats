@@ -64,8 +64,8 @@ of day, so each play takes the date of its heading, at 12:00 UTC:
 | A `YYYY-MM-DD` date                                   | That date.                   |
 | Anything else                                         | Dropped.                     |
 
-For a dropped heading, a `warn` log names the heading and how many plays it
-held.
+The Last week heading spans several days, so its plays share one date. For a
+dropped heading, a `warn` log names the heading and how many plays it held.
 
 A play counts if its timestamp is no more than `DAYS` times 24 hours old.
 Because the timestamp is noon UTC, a play from yesterday is dropped with
