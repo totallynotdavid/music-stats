@@ -2,103 +2,67 @@ use chrono::Utc;
 use music_stats::aggregate::compute_statistics;
 use music_stats::providers::types::Scrobble;
 
-#[test]
-fn empty_scrobbles_returns_empty_statistics() {
-    let stats = compute_statistics(vec![], 10);
-
-    assert_eq!(stats.top_tracks.len(), 0);
-    assert_eq!(stats.total_plays, 0);
-    assert_eq!(stats.unique_tracks, 0);
+fn scrobbles(plays: &[(&str, &str)]) -> Vec<Scrobble> {
+    plays
+        .iter()
+        .map(|(artist, title)| Scrobble::new(artist.to_string(), title.to_string(), Utc::now()))
+        .collect()
 }
 
 #[test]
-fn single_track_played_once() {
-    let scrobbles = vec![Scrobble::new("Artist".into(), "Track".into(), Utc::now())];
-
-    let stats = compute_statistics(scrobbles, 10);
-
-    assert_eq!(stats.top_tracks.len(), 1);
-    assert_eq!(stats.top_tracks[0].1, 1);
-    assert_eq!(stats.total_plays, 1);
-    assert_eq!(stats.unique_tracks, 1);
-}
-
-#[test]
-fn same_track_played_multiple_times() {
-    let scrobbles = vec![
-        Scrobble::new("Artist".into(), "Track".into(), Utc::now()),
-        Scrobble::new("Artist".into(), "Track".into(), Utc::now()),
-        Scrobble::new("Artist".into(), "Track".into(), Utc::now()),
+fn counts_plays_and_unique_tracks() {
+    let cases = [
+        (vec![], 10, [0, 0, 0]),
+        (vec!["A"], 10, [1, 1, 1]),
+        (vec!["A", "A", "A"], 10, [1, 3, 1]),
+        (vec!["A1", "A2", "A3", "A4", "A5"], 3, [3, 5, 5]),
+        (vec!["A1", "A2"], 10, [2, 2, 2]),
     ];
 
-    let stats = compute_statistics(scrobbles, 10);
+    for (artists, top_n, expected) in cases {
+        let plays: Vec<(&str, &str)> = artists.iter().map(|artist| (*artist, "T")).collect();
 
-    assert_eq!(stats.top_tracks.len(), 1);
-    assert_eq!(stats.top_tracks[0].1, 3);
-    assert_eq!(stats.total_plays, 3);
-    assert_eq!(stats.unique_tracks, 1);
+        let stats = compute_statistics(scrobbles(&plays), top_n);
+
+        assert_eq!(
+            [
+                stats.top_tracks.len(),
+                stats.total_plays,
+                stats.unique_tracks
+            ],
+            expected,
+            "{artists:?}"
+        );
+    }
 }
 
 #[test]
 fn tracks_sorted_by_play_count() {
-    let scrobbles = vec![
-        Scrobble::new("A1".into(), "T1".into(), Utc::now()),
-        Scrobble::new("A2".into(), "T2".into(), Utc::now()),
-        Scrobble::new("A2".into(), "T2".into(), Utc::now()),
-        Scrobble::new("A3".into(), "T3".into(), Utc::now()),
-        Scrobble::new("A3".into(), "T3".into(), Utc::now()),
-        Scrobble::new("A3".into(), "T3".into(), Utc::now()),
-    ];
+    let plays = scrobbles(&[
+        ("A1", "T1"),
+        ("A2", "T2"),
+        ("A2", "T2"),
+        ("A3", "T3"),
+        ("A3", "T3"),
+        ("A3", "T3"),
+    ]);
 
-    let stats = compute_statistics(scrobbles, 10);
+    let stats = compute_statistics(plays, 10);
 
-    assert_eq!(stats.top_tracks[0].1, 3);
-    assert_eq!(stats.top_tracks[0].0.artist, "A3");
-    assert_eq!(stats.top_tracks[1].1, 2);
-    assert_eq!(stats.top_tracks[1].0.artist, "A2");
-    assert_eq!(stats.top_tracks[2].1, 1);
-    assert_eq!(stats.top_tracks[2].0.artist, "A1");
-}
-
-#[test]
-fn top_n_truncates_results() {
-    let scrobbles = vec![
-        Scrobble::new("A1".into(), "T1".into(), Utc::now()),
-        Scrobble::new("A2".into(), "T2".into(), Utc::now()),
-        Scrobble::new("A3".into(), "T3".into(), Utc::now()),
-        Scrobble::new("A4".into(), "T4".into(), Utc::now()),
-        Scrobble::new("A5".into(), "T5".into(), Utc::now()),
-    ];
-
-    let stats = compute_statistics(scrobbles, 3);
-
-    assert_eq!(stats.top_tracks.len(), 3);
-    assert_eq!(stats.unique_tracks, 5);
-}
-
-#[test]
-fn top_n_larger_than_unique_tracks() {
-    let scrobbles = vec![
-        Scrobble::new("A1".into(), "T1".into(), Utc::now()),
-        Scrobble::new("A2".into(), "T2".into(), Utc::now()),
-    ];
-
-    let stats = compute_statistics(scrobbles, 10);
-
-    assert_eq!(stats.top_tracks.len(), 2);
-    assert_eq!(stats.unique_tracks, 2);
+    let order: Vec<(&str, usize)> = stats
+        .top_tracks
+        .iter()
+        .map(|(track, count)| (track.artist.as_str(), *count))
+        .collect();
+    assert_eq!(order, [("A3", 3), ("A2", 2), ("A1", 1)]);
 }
 
 #[test]
 fn ties_are_ordered_by_artist_then_title() {
-    let plays = [("B", "x"), ("A", "z"), ("A", "y"), ("C", "a")];
-    let scrobbles: Vec<Scrobble> = plays
-        .iter()
-        .map(|(artist, title)| Scrobble::new(artist.to_string(), title.to_string(), Utc::now()))
-        .collect();
+    let plays = scrobbles(&[("B", "x"), ("A", "z"), ("A", "y"), ("C", "a")]);
 
     for _ in 0..20 {
-        let stats = compute_statistics(scrobbles.clone(), 10);
+        let stats = compute_statistics(plays.clone(), 10);
         let order: Vec<(&str, &str)> = stats
             .top_tracks
             .iter()

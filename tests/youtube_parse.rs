@@ -32,48 +32,28 @@ fn decodes_utf8_spelled_as_hex_escapes() {
 }
 
 #[test]
-fn fails_when_hex_escapes_are_not_utf8() {
-    let page = history_page(&history_json(&[("2024-01-15", &[("Bad", "Artist")])]))
+fn rejects_pages_it_cannot_extract() {
+    let not_utf8 = history_page(&history_json(&[("2024-01-15", &[("Bad", "Artist")])]))
         .replace("Bad", "\\xff\\xfe");
+    let cases = [
+        (not_utf8.as_str(), "UTF-8"),
+        (
+            "<html><body>No marker here</body></html>",
+            "marker not found",
+        ),
+        (
+            "});ytcfg.set({'YTMUSIC_INITIAL_DATA': initialData});",
+            "Opening brace",
+        ),
+        (
+            "<script>var x = {foo: 'bar'};});ytcfg.set({'YTMUSIC_INITIAL_DATA': initialData});</script>",
+            "data field",
+        ),
+    ];
 
-    let err = extract_json_from_html(&page).unwrap_err();
-    assert!(format!("{}", err).contains("UTF-8"));
-}
+    for (html, message) in cases {
+        let error = extract_json_from_html(html).unwrap_err().to_string();
 
-#[test]
-fn fails_when_marker_missing() {
-    let html = "<html><body>No marker here</body></html>";
-
-    let result = extract_json_from_html(html);
-    assert!(result.is_err());
-
-    let err = result.unwrap_err();
-    assert!(format!("{}", err).contains("marker not found"));
-}
-
-#[test]
-fn fails_when_opening_brace_missing() {
-    let html = "});ytcfg.set({'YTMUSIC_INITIAL_DATA': initialData});";
-
-    let result = extract_json_from_html(html);
-    assert!(result.is_err());
-
-    let err = result.unwrap_err();
-    assert!(format!("{}", err).contains("Opening brace"));
-}
-
-#[test]
-fn fails_when_data_field_missing() {
-    let html = r#"
-        <script>
-        var x = {foo: 'bar'};
-        });ytcfg.set({'YTMUSIC_INITIAL_DATA': initialData});
-        </script>
-    "#;
-
-    let result = extract_json_from_html(html);
-    assert!(result.is_err());
-
-    let err = result.unwrap_err();
-    assert!(format!("{}", err).contains("data field"));
+        assert!(error.contains(message), "{error:?} lacks {message:?}");
+    }
 }

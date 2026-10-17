@@ -5,35 +5,6 @@ use tracing_test::traced_test;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-#[test]
-fn parses_real_lastfm_history() {
-    let json = std::fs::read_to_string("tests/fixtures/recent_tracks.json")
-        .expect("tracked fixture tests/fixtures/recent_tracks.json is missing");
-
-    let data: serde_json::Value =
-        serde_json::from_str(&json).expect("Failed to parse real Last.fm JSON");
-
-    let tracks = data["recenttracks"]["track"]
-        .as_array()
-        .expect("Expected track array");
-
-    assert!(!tracks.is_empty(), "Expected tracks from real history");
-
-    for track in tracks {
-        if track.get("date").is_some() {
-            assert!(track["name"].is_string(), "Track must have name");
-            assert!(
-                track["artist"]["#text"].is_string(),
-                "Track must have artist"
-            );
-            assert!(
-                track["date"]["uts"].is_string(),
-                "Track must have timestamp"
-            );
-        }
-    }
-}
-
 #[tokio::test]
 async fn parses_the_recorded_response_through_the_client() {
     let body = std::fs::read_to_string("tests/fixtures/recent_tracks.json")
@@ -152,8 +123,10 @@ async fn stops_at_max_pages_and_warns() {
     assert!(logs_contain("MAX_PAGES"));
 }
 
+const SECRET: &str = "s3cr3t-api-key";
+
 #[tokio::test]
-async fn non_2xx_yields_lastfm_error() {
+async fn non_2xx_yields_lastfm_error_without_the_api_key() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -163,19 +136,22 @@ async fn non_2xx_yields_lastfm_error() {
         .await;
 
     let client = reqwest::Client::new();
-    let result = lastfm::fetch_scrobbles(&client, &server.uri(), "key", "user", 7).await;
+    let error = lastfm::fetch_scrobbles(&client, &server.uri(), SECRET, "user", 7)
+        .await
+        .unwrap_err();
 
-    match result.unwrap_err() {
+    match &error {
         Error::LastFm { status, body, .. } => {
-            assert_eq!(status, 500);
+            assert_eq!(*status, 500);
             assert_eq!(body, "internal error");
         }
         other => panic!("expected Error::LastFm, got {:?}", other),
     }
+    assert!(!format!("{} {:?}", error, error).contains(SECRET));
 }
 
 #[tokio::test]
-async fn malformed_json_yields_parse_error() {
+async fn malformed_json_yields_network_error_without_the_api_key() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -185,45 +161,11 @@ async fn malformed_json_yields_parse_error() {
         .await;
 
     let client = reqwest::Client::new();
-    let result = lastfm::fetch_scrobbles(&client, &server.uri(), "key", "user", 7).await;
-
-    assert!(matches!(result, Err(Error::Network { .. })));
-}
-
-const SECRET: &str = "s3cr3t-api-key";
-
-#[tokio::test]
-async fn http_error_does_not_print_the_api_key() {
-    let server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(403).set_body_string("forbidden"))
-        .mount(&server)
-        .await;
-
-    let client = reqwest::Client::new();
     let error = lastfm::fetch_scrobbles(&client, &server.uri(), SECRET, "user", 7)
         .await
         .unwrap_err();
 
-    assert!(matches!(error, Error::LastFm { status: 403, .. }));
-    assert!(!format!("{} {:?}", error, error).contains(SECRET));
-}
-
-#[tokio::test]
-async fn malformed_body_does_not_print_the_api_key() {
-    let server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
-        .mount(&server)
-        .await;
-
-    let client = reqwest::Client::new();
-    let error = lastfm::fetch_scrobbles(&client, &server.uri(), SECRET, "user", 7)
-        .await
-        .unwrap_err();
-
+    assert!(matches!(error, Error::Network { .. }));
     assert!(!format!("{} {:?}", error, error).contains(SECRET));
 }
 
