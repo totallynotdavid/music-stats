@@ -34,9 +34,6 @@ pub async fn run(client: &reqwest::Client, config: &Config) -> Result<(), Error>
     Ok(())
 }
 
-/// Fetches scrobbles from every configured provider. A provider that fails is
-/// logged at `warn` and skipped so the others can still publish; the overall
-/// fetch only fails once every configured provider has failed.
 pub async fn fetch_scrobbles(
     client: &reqwest::Client,
     config: &Config,

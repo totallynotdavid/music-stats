@@ -13,7 +13,6 @@ pub async fn fetch_scrobbles(
     let json = youtube_parse::extract_json_from_html(&html)?;
     let scrobbles = youtube_json::parse_scrobbles(&json)?;
     if scrobbles.is_empty() {
-        // An expired cookie still gets a page back, just without history.
         return Err(Error::YouTube {
             stage: "history".to_string(),
             detail: "No plays found on the history page; the cookie may have expired".to_string(),

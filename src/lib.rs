@@ -1,4 +1,3 @@
-//! Exposed for the tests
 pub mod aggregate;
 pub mod app;
 pub mod config;

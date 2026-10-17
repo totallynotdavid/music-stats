@@ -11,7 +11,6 @@ pub fn parse_scrobbles(json_str: &str) -> Result<Vec<Scrobble>, Error> {
     parse_scrobbles_on(json_str, Utc::now().date_naive())
 }
 
-/// Parses with an explicit "today" (UTC), so relative headings are testable.
 pub fn parse_scrobbles_on(json_str: &str, today: NaiveDate) -> Result<Vec<Scrobble>, Error> {
     let json: Value = serde_json::from_str(json_str).map_err(|e| Error::YouTube {
         stage: "json_parsing".to_string(),
@@ -108,10 +107,6 @@ fn is_artist_endpoint(endpoint: &Value) -> bool {
         .unwrap_or(false)
 }
 
-/// Maps a section heading to a day. YouTube gives no per-play time, so every
-/// play in a section gets noon UTC of that day, and "Last week" (an unbounded
-/// range of days) is placed `LAST_WEEK_OFFSET_DAYS` back. Unrecognized
-/// headings return `None`.
 fn resolve_shelf_date(label: &str, today: NaiveDate) -> Option<DateTime<Utc>> {
     let lower = label.to_lowercase();
     let matches = |words: &[&str]| words.iter().any(|w| lower.contains(w));

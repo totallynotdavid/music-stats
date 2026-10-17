@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Refreshes tests/fixtures from the live services.
-# Requires curl and sha1sum or shasum on Linux or macOS.
 set -euo pipefail
 
 FIXTURES_DIR="tests/fixtures"

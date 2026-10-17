@@ -44,14 +44,11 @@ impl Provider {
     }
 }
 
-/// Loads configuration from the process environment.
 pub fn load() -> Result<Config, Error> {
     let env: HashMap<String, String> = std::env::vars().collect();
     load_from(&env)
 }
 
-/// Loads configuration from an injected source, so tests can supply their own
-/// values instead of mutating process env (which is shared across threads).
 pub fn load_from(env: &HashMap<String, String>) -> Result<Config, Error> {
     let gist_id = require_env(env, "GIST_ID")?;
     let github_token = require_env(env, "GH_TOKEN")?;
