@@ -1,7 +1,16 @@
 name: CI
 
 on:
+  push:
+    branches: [master]
   pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   check:
@@ -9,11 +18,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: jdx/mise-action@v5.1.1
 
-      - name: Check formatting and lints
-        run: mise run check
+      - run: mise run install
 
-      - name: Run tests
-        run: cargo test
+      - run: mise run check
