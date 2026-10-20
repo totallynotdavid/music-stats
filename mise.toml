@@ -1,5 +1,5 @@
 [tools]
-rust = { version = "1.99.0", components = "rustfmt,clippy,llvm-tools" }
+rust = { version = "1.99.1", components = "rustfmt,clippy,llvm-tools" }
 "aqua:taiki-e/cargo-llvm-cov" = "0.9.1"
 oxfmt = "0.73.0"
 
