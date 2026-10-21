@@ -1,22 +1,59 @@
 name: release
 
+# A tag publishes. A pull request or a manual run does the same work without
+# the upload steps, so a release that would fail fails on the pull request.
 on:
   push:
     tags:
       - "v*.*.*"
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  preflight:
+    if: github.repository == 'totallynotdavid/music-stats'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check that the environments the publish jobs name exist
+        run: bash scripts/preflight.sh "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   verify:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Check the tag against the manifest and the release notes
-        run: bash scripts/check-release.sh "$GITHUB_REF_NAME"
+      - name:
+          Check the manifest and the release notes, and the tag if there is one
+        run: bash scripts/check-release.sh "$TAG"
+        env:
+          TAG:
+            ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+
+  package:
+    needs: verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+
+      - name: Package the crate and build it from the package
+        run: mise run package
 
   release:
     needs: verify
@@ -35,7 +72,8 @@ jobs:
           path: target/release/music-stats
 
   create-release:
-    needs: release
+    needs: [preflight, package, release]
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -48,6 +86,7 @@ jobs:
           path: artifacts
 
       - name: Create release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: artifacts/**/*
@@ -58,7 +97,9 @@ jobs:
 
   publish-crates:
     needs: create-release
-    if: github.repository == 'totallynotdavid/music-stats'
+    if:
+      github.repository == 'totallynotdavid/music-stats' &&
+      startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       id-token: write

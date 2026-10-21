@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Refuses a release tag that does not match the manifest or the release notes.
-# Usage: scripts/check-release.sh vX.Y.Z
+# Refuses a release whose manifest version and release notes disagree.
+# Refuses a tag that disagrees with the manifest. Without a tag, as on a pull
+# request, the check covers the manifest and the notes only.
+# Usage: scripts/check-release.sh [vX.Y.Z]
 set -euo pipefail
 
-tag="${1:?usage: check-release.sh vX.Y.Z}"
+tag="${1:-}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 name="$(sed -n '/^\[package\]/,/^\[/{s/^name = "\(.*\)"$/\1/p;}' "$root/Cargo.toml")"
 version="$(sed -n '/^\[package\]/,/^\[/{s/^version = "\(.*\)"$/\1/p;}' "$root/Cargo.toml")"
 
-if [ "$tag" != "v$version" ]; then
+if [ -n "$tag" ] && [ "$tag" != "v$version" ]; then
   echo "error: tag $tag does not match Cargo.toml version $version" >&2
   exit 1
 fi
@@ -21,4 +23,4 @@ if [ "$first" != "$expected" ]; then
   exit 1
 fi
 
-echo "ok: $tag matches Cargo.toml and .github/release-notes.md"
+echo "ok: ${tag:-Cargo.toml $version} matches .github/release-notes.md${tag:+ and Cargo.toml}"

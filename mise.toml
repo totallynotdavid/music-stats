@@ -54,6 +54,10 @@ run = "cargo llvm-cov --locked --all-features --workspace --lcov --output-path l
 description = "Publish the crate to crates.io (needs CARGO_REGISTRY_TOKEN)"
 run = "cargo publish --locked"
 
+[tasks.package]
+description = "Package the crate and build it from the package, without uploading"
+run = "cargo publish --dry-run --locked"
+
 [tasks.fetch-fixtures]
 description = "Refresh tests/fixtures from the live Last.fm and YouTube Music services"
 run = "./scripts/fetch-fixtures.sh"
