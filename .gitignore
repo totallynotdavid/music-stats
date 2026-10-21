@@ -4,6 +4,8 @@
 
 # environment variables
 .env
+.env.*
+!.env.example
 
 # coverage
 /lcov.info
