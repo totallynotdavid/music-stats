@@ -9,7 +9,17 @@ permissions:
   contents: read
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check the tag against the manifest and the release notes
+        run: bash scripts/check-release.sh "$GITHUB_REF_NAME"
+
   release:
+    needs: verify
     runs-on: ubuntu-latest
 
     steps:
@@ -41,6 +51,7 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: artifacts/**/*
+          body_path: .github/release-notes.md
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
