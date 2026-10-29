@@ -23,7 +23,7 @@ sha1 = "0.11.0"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-unicode-width = "0.2.2"
+unicode-width = "0.2.3"
 
 [profile.release]
 opt-level = 3
