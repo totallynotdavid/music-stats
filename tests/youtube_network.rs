@@ -51,6 +51,28 @@ async fn refuses_a_history_page_without_plays() {
 }
 
 #[tokio::test]
+async fn a_window_longer_than_the_clock_keeps_every_play() {
+    let server = MockServer::start().await;
+    let page = history_page(&history_json(&[("2024-01-15", &[("Song", "Artist")])]));
+
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(page))
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    let cookie = "__Secure-3PAPISID=testsapisid123; SOCS=CAI";
+
+    for days in [u64::MAX, 1 << 60] {
+        let plays = youtube::fetch_scrobbles(&client, &server.uri(), cookie, days)
+            .await
+            .unwrap_or_else(|error| panic!("days={days}: {error}"));
+
+        assert_eq!(plays.len(), 1, "days={days}");
+    }
+}
+
+#[tokio::test]
 async fn returns_plays_from_the_history_page() {
     let server = MockServer::start().await;
     let page = history_page(&history_json(&[("Today", &[("Canción", "Artista")])]));

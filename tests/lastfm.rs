@@ -61,6 +61,26 @@ async fn encodes_query_values() {
     assert_eq!(scrobbles.len(), 1);
 }
 
+#[tokio::test]
+async fn a_window_longer_than_the_clock_reads_from_the_epoch() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(query_param("from", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page_response("Song", "1")))
+        .mount(&server)
+        .await;
+
+    let client = reqwest::Client::new();
+    for days in [u64::MAX, u64::MAX / 86400 + 1, 1 << 60, 1_000_000] {
+        let scrobbles = lastfm::fetch_scrobbles(&client, &server.uri(), "key", "user", days)
+            .await
+            .unwrap_or_else(|error| panic!("days={days}: {error}"));
+
+        assert_eq!(scrobbles.len(), 1, "days={days}");
+    }
+}
+
 fn page_response(track_name: &str, total_pages: &str) -> serde_json::Value {
     json!({
         "recenttracks": {
