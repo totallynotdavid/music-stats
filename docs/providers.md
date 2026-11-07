@@ -70,4 +70,5 @@ dropped heading, a `warn` log names the heading and how many plays it held.
 A play counts if its timestamp is no more than `DAYS` times 24 hours old.
 Because the timestamp is noon UTC, a play from yesterday is dropped with
 `DAYS=1` once it is past noon UTC today. A play with no artist link is listed as
-`Unknown Artist`. A play with no title link is skipped.
+`Unknown Artist`. A play with several artist links is listed under the first
+one. A play with no title link is skipped.

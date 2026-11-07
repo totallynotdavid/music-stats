@@ -22,9 +22,10 @@ At least one provider must be configured: both Last.fm variables, or
 `YOUTUBE_COOKIE`. A Last.fm provider needs both its variables. If only one is
 set, `music-stats` ignores it.
 
-A variable that is empty or only whitespace counts as not set. `DAYS` and
-`TOP_N` must then be unset or a whole number of at least 1. Whitespace around
-the number is allowed.
+A variable that is empty or only whitespace counts as not set. Whitespace around
+a value, such as the newline a pasted token often carries, is removed. `DAYS`
+and `TOP_N` must be unset or a whole number of at least 1. A `DAYS` larger than
+the history that exists reads all of it.
 
 ## Logging
 
