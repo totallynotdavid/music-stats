@@ -98,8 +98,8 @@ fn try_load_lastfm(env: &HashMap<String, String>) -> Option<LastFmConfig> {
 
 fn lookup_env(env: &HashMap<String, String>, key: &str) -> Option<String> {
     env.get(key)
-        .map(|s| s.as_str())
-        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
         .map(String::from)
 }
 
@@ -118,13 +118,10 @@ where
     T::Err: std::fmt::Display,
 {
     match lookup_env(env, key) {
-        Some(value) => value
-            .trim()
-            .parse()
-            .map_err(|e: T::Err| Error::InvalidConfig {
-                field: key.to_string(),
-                reason: e.to_string(),
-            }),
+        Some(value) => value.parse().map_err(|e: T::Err| Error::InvalidConfig {
+            field: key.to_string(),
+            reason: e.to_string(),
+        }),
         None => Ok(default),
     }
 }
