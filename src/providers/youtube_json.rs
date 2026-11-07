@@ -79,16 +79,20 @@ fn extract_title_and_artist(columns: &[Value]) -> Option<(String, String)> {
     let mut artist: Option<String> = None;
 
     for column in columns {
-        let runs = column
-            .pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")?
-            .as_array()?;
+        let Some(runs) = column
+            .pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs")
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
 
         for run in runs {
             if let Some(endpoint) = run.get("navigationEndpoint") {
+                let text = run.get("text").and_then(Value::as_str).map(String::from);
                 if endpoint.get("watchEndpoint").is_some() {
-                    title = run.get("text").and_then(|v| v.as_str()).map(String::from);
+                    title = title.or(text);
                 } else if is_artist_endpoint(endpoint) {
-                    artist = run.get("text").and_then(|v| v.as_str()).map(String::from);
+                    artist = artist.or(text);
                 }
             }
         }
