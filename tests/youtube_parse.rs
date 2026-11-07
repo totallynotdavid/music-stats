@@ -5,11 +5,20 @@ use music_stats::providers::youtube_json::parse_scrobbles;
 use music_stats::providers::youtube_parse::extract_json_from_html;
 
 #[test]
-fn keeps_non_ascii_text_from_the_recorded_page() {
+fn reads_every_play_of_the_recorded_page() {
     let html = std::fs::read_to_string("tests/fixtures/history.html").expect("fixture missing");
 
     let json = extract_json_from_html(&html).expect("extract");
     let plays = parse_scrobbles(&json).expect("parse");
+
+    assert_eq!(plays.len(), 200, "every play on the page is kept");
+
+    let collaboration = plays.iter().find(|s| s.track.title == "Golden");
+    assert_eq!(
+        collaboration.expect("track missing").track.artist,
+        "HUNTR/X",
+        "the first credited artist names the play"
+    );
 
     let spanish = plays
         .iter()
