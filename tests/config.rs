@@ -98,6 +98,30 @@ fn selects_providers_from_complete_settings() {
 }
 
 #[test]
+fn trims_whitespace_around_every_value() {
+    let config = load(&[
+        ("GIST_ID", " gist\n"),
+        ("GH_TOKEN", "token\n"),
+        ("LASTFM_API_KEY", "key "),
+        ("LASTFM_USERNAME", " user"),
+        ("YOUTUBE_COOKIE", "\tcookie \n"),
+    ])
+    .unwrap();
+
+    let lastfm = config.provider.lastfm().unwrap();
+    assert_eq!(
+        (
+            config.gist_id.as_str(),
+            config.github_token.as_str(),
+            lastfm.api_key.as_str(),
+            lastfm.username.as_str(),
+            config.provider.youtube_cookie().unwrap(),
+        ),
+        ("gist", "token", "key", "user", "cookie")
+    );
+}
+
+#[test]
 fn reads_days_and_top_n() {
     let cases = [
         (vec![], 7, 5),
