@@ -1,4 +1,12 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
+
+pub fn cutoff(days: u64) -> DateTime<Utc> {
+    i64::try_from(days)
+        .ok()
+        .and_then(TimeDelta::try_days)
+        .and_then(|span| Utc::now().checked_sub_signed(span))
+        .map_or(DateTime::UNIX_EPOCH, |at| at.max(DateTime::UNIX_EPOCH))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Track {

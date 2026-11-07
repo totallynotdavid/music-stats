@@ -1,5 +1,5 @@
 use crate::errors::Error;
-use crate::providers::types::Scrobble;
+use crate::providers::types::{self, Scrobble};
 use chrono::{TimeZone, Utc};
 use serde::Deserialize;
 use std::time::Duration;
@@ -18,7 +18,7 @@ pub async fn fetch_scrobbles(
     username: &str,
     days: u64,
 ) -> Result<Vec<Scrobble>, Error> {
-    let from_timestamp = calculate_timestamp(days);
+    let from_timestamp = types::cutoff(days).timestamp().unsigned_abs();
     let tracks = fetch_all_pages(client, base_url, api_key, username, from_timestamp).await?;
     Ok(tracks.into_iter().filter_map(parse_track).collect())
 }
@@ -123,14 +123,6 @@ fn parse_track(track: ApiTrack) -> Option<Scrobble> {
     let timestamp: i64 = track.date?.uts.parse().ok()?;
     let played_at = Utc.timestamp_opt(timestamp, 0).single()?;
     Some(Scrobble::new(track.artist.text, track.name, played_at))
-}
-
-fn calculate_timestamp(days: u64) -> u64 {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("System time before UNIX epoch")
-        .as_secs();
-    now.saturating_sub(days * 86400)
 }
 
 #[derive(Debug, Deserialize)]

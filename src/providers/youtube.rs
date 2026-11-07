@@ -1,7 +1,6 @@
 use crate::errors::Error;
-use crate::providers::types::Scrobble;
+use crate::providers::types::{self, Scrobble};
 use crate::providers::{youtube_http, youtube_json, youtube_parse};
-use chrono::{Duration, Utc};
 
 pub async fn fetch_scrobbles(
     client: &reqwest::Client,
@@ -23,7 +22,7 @@ pub async fn fetch_scrobbles(
 }
 
 fn filter_by_date(scrobbles: Vec<Scrobble>, days: u64) -> Vec<Scrobble> {
-    let cutoff = Utc::now() - Duration::days(days as i64);
+    let cutoff = types::cutoff(days);
     scrobbles
         .into_iter()
         .filter(|s| s.played_at >= cutoff)
