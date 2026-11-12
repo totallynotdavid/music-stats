@@ -1,6 +1,7 @@
 import { applyD1Migrations, env, reset, SELF } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import migrations from "virtual:web-migrations";
+import { getStats } from "../src/aggregate";
 import { app } from "../src/app";
 import {
   readTrackSql,
@@ -444,19 +445,36 @@ describe("ListenBrainz ingestion", () => {
     )
       .bind(artist?.id)
       .first<{ id: number }>();
-    await env.DB.prepare(
-      "INSERT INTO plays (user_id, played_at, source_id, track_id) VALUES (1, ?1, 10, ?2)",
-    )
-      .bind(now, track?.id)
-      .run();
+    const dayStart = Math.floor(now / 86400) * 86400;
+    const play = (playedAt: number) =>
+      env.DB.prepare(
+        "INSERT INTO plays (user_id, played_at, source_id, track_id) VALUES (1, ?1, 10, ?2)",
+      ).bind(playedAt, track?.id);
+    await play(dayStart + 3600).run();
+    await play(dayStart + 7200).run();
+    const rollup = (table: string) =>
+      env.DB.prepare(`SELECT plays FROM ${table}`).first<{ plays: number }>();
     expect(await count("track_totals")).toBe(1);
+    expect(await count("daily_totals")).toBe(1);
+    expect(await count("artist_totals")).toBe(1);
+    expect(await rollup("daily_totals")).toEqual({ plays: 2 });
+    expect(await rollup("artist_totals")).toEqual({ plays: 2 });
 
-    await env.DB.prepare(
-      "UPDATE plays SET dup = 1 WHERE user_id = 1 AND played_at = ?1 AND source_id = 10",
-    )
-      .bind(now)
-      .run();
+    const undup = (playedAt: number) =>
+      env.DB.prepare(
+        "UPDATE plays SET dup = 1 WHERE user_id = 1 AND played_at = ?1 AND source_id = 10",
+      ).bind(playedAt);
+    await undup(dayStart + 3600).run();
+    expect(await count("track_totals")).toBe(1);
+    expect(await count("daily_totals")).toBe(1);
+    expect(await count("artist_totals")).toBe(1);
+    expect(await rollup("daily_totals")).toEqual({ plays: 1 });
+    expect(await rollup("artist_totals")).toEqual({ plays: 1 });
+
+    await undup(dayStart + 7200).run();
     expect(await count("track_totals")).toBe(0);
+    expect(await count("daily_totals")).toBe(0);
+    expect(await count("artist_totals")).toBe(0);
   });
 });
 
@@ -505,6 +523,107 @@ describe("profile API", () => {
     expect(
       (await SELF.fetch("https://music.rising.sh/u/unknown.json")).status,
     ).toBe(404);
+  });
+
+  it("pins the snapshot JSON for a fixed set of plays", async () => {
+    const pinnedNow = 1_700_000_000;
+    await seedUser();
+    await env.DB.prepare(
+      "INSERT INTO artists (id, key, name) VALUES (1, 'artista', 'Artist A'), (2, 'artistb', 'Artist B')",
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO tracks (id, key, artist_id, title) VALUES
+       (1, 'artistasongone', 1, 'Song One'),
+       (2, 'artistasongtwo', 1, 'Song Two'),
+       (3, 'artistbsongthree', 2, 'Song Three')`,
+    ).run();
+    const play = (playedAt: number, trackId: number, dup = 0) =>
+      env.DB.prepare(
+        "INSERT INTO plays (user_id, played_at, source_id, track_id, dup) VALUES (1, ?1, 10, ?2, ?3)",
+      ).bind(playedAt, trackId, dup);
+    await play(pinnedNow - 3600, 1).run();
+    await play(pinnedNow - 86400, 1).run();
+    await play(pinnedNow - 3 * 86400, 2).run();
+    await play(pinnedNow - 10 * 86400, 3).run();
+    await play(pinnedNow - 40 * 86400, 2).run();
+    await play(pinnedNow - 7200, 1, 1).run();
+
+    const track = (title: string, artist: string, plays: number) => ({
+      title,
+      artist,
+      plays,
+    });
+    const artist = (name: string, plays: number) => ({
+      artist: name,
+      plays,
+    });
+    const daily = (day: string, plays: number) => ({ day, plays });
+    const base = {
+      schema: 1,
+      user: { name: "alice" },
+      to: pinnedNow,
+      updated_at: pinnedNow,
+    } as const;
+
+    expect(await getStats(env.DB, 1, "alice", "week", pinnedNow)).toEqual({
+      ...base,
+      period: "week",
+      from: pinnedNow - 7 * 86400,
+      plays: 3,
+      unique_tracks: 2,
+      unique_artists: 1,
+      top_tracks: [
+        track("Song One", "Artist A", 2),
+        track("Song Two", "Artist A", 1),
+      ],
+      top_artists: [artist("Artist A", 3)],
+      daily: [
+        daily("2023-11-11", 1),
+        daily("2023-11-13", 1),
+        daily("2023-11-14", 1),
+      ],
+    });
+    expect(await getStats(env.DB, 1, "alice", "month", pinnedNow)).toEqual({
+      ...base,
+      period: "month",
+      from: pinnedNow - 30 * 86400,
+      plays: 4,
+      unique_tracks: 3,
+      unique_artists: 2,
+      top_tracks: [
+        track("Song One", "Artist A", 2),
+        track("Song Two", "Artist A", 1),
+        track("Song Three", "Artist B", 1),
+      ],
+      top_artists: [artist("Artist A", 3), artist("Artist B", 1)],
+      daily: [
+        daily("2023-11-04", 1),
+        daily("2023-11-11", 1),
+        daily("2023-11-13", 1),
+        daily("2023-11-14", 1),
+      ],
+    });
+    expect(await getStats(env.DB, 1, "alice", "all", pinnedNow)).toEqual({
+      ...base,
+      period: "all",
+      from: null,
+      plays: 5,
+      unique_tracks: 3,
+      unique_artists: 2,
+      top_tracks: [
+        track("Song One", "Artist A", 2),
+        track("Song Two", "Artist A", 2),
+        track("Song Three", "Artist B", 1),
+      ],
+      top_artists: [artist("Artist A", 4), artist("Artist B", 1)],
+      daily: [
+        daily("2023-10-05", 1),
+        daily("2023-11-04", 1),
+        daily("2023-11-11", 1),
+        daily("2023-11-13", 1),
+        daily("2023-11-14", 1),
+      ],
+    });
   });
 
   it("serves a snapshot when KV reads fail", async () => {
