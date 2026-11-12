@@ -476,6 +476,113 @@ describe("pull scheduling", () => {
     expect(await count("plays")).toBe(3);
   });
 
+  it("skips the history walk once the daily row tally reaches the cap", async () => {
+    await seedUser({ cursor: now, backfill_before: now - 1 });
+    await env.CACHE.put("backfill-rows", "50000");
+    const current = listens.map((listen, index) => ({
+      ...listen,
+      listened_at: now - index,
+    }));
+    const fetcher = vi.fn(async (url: string) =>
+      new URL(url).searchParams.has("max_ts")
+        ? listensBody([listens[0]])
+        : listensBody(current),
+    );
+    const result = await pullListenBrainz(env, await sourceRow(), fetcher, now);
+    expect(result.inserted).toBe(current.length);
+    const walkCalls = fetcher.mock.calls.filter(([url]) =>
+      new URL(url).searchParams.has("max_ts"),
+    );
+    expect(walkCalls).toHaveLength(0);
+    const stored = await env.DB.prepare(
+      "SELECT next_pull_at, backfill_before FROM sources WHERE id = 10",
+    ).first<{ next_pull_at: number; backfill_before: number | null }>();
+    expect(stored).toEqual({
+      next_pull_at: now + 15 * 60,
+      backfill_before: now - 1,
+    });
+  });
+
+  it("shares the daily backfill cap across sources", async () => {
+    await seedUser({ cursor: now, backfill_before: now - 1 });
+    await env.DB.prepare(
+      "INSERT INTO users (github_id, name, created_at) VALUES (2, 'bob', ?1)",
+    )
+      .bind(now)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO sources (id, user_id, kind, account, cursor, backfill_before, next_pull_at)
+         VALUES (20, 2, 'listenbrainz', 'bob-lb', ?1, ?2, ?3)`,
+    )
+      .bind(now, now - 500, now)
+      .run();
+    await env.CACHE.put("backfill-rows", "50000");
+    const fetcher = vi.fn(async (_url: string) => listensBody(listens));
+    const other = await env.DB.prepare(
+      "SELECT * FROM sources WHERE id = 20",
+    ).first<SourceRow>();
+    await pullListenBrainz(env, other!, fetcher, now);
+    const walkCalls = fetcher.mock.calls.filter(([url]) =>
+      new URL(url).searchParams.has("max_ts"),
+    );
+    expect(walkCalls).toHaveLength(0);
+    const stored = await env.DB.prepare(
+      "SELECT backfill_before FROM sources WHERE id = 20",
+    ).first<{ backfill_before: number | null }>();
+    expect(stored?.backfill_before).toBe(now - 500);
+  });
+
+  it("does not touch the backfill tally for a source that is not backfilling", async () => {
+    await seedUser({ cursor: now - 1000, backfill_before: null });
+    const page = listens.slice(0, 3).map((listen, index) => ({
+      ...listen,
+      listened_at: now - index,
+    }));
+    const fetcher = async () => listensBody(page);
+    const result = await pullListenBrainz(env, await sourceRow(), fetcher, now);
+    expect(result.inserted).toBe(3);
+    expect(await env.CACHE.get("backfill-rows")).toBeNull();
+  });
+
+  it("counts the walk's written rows toward the daily backfill tally", async () => {
+    await seedUser({ cursor: now, backfill_before: now - 1 });
+    const page = Array.from({ length: 200 }, (_, index) => ({
+      listened_at: now - 100 - index,
+      track_metadata: {
+        artist_name: `Tally Artist ${index}`,
+        track_name: `Tally Song ${index}`,
+        additional_info: {},
+      },
+    }));
+    const fetcher = async (url: string) =>
+      new URL(url).searchParams.has("max_ts")
+        ? listensBody(page)
+        : listensBody([]);
+    await pullListenBrainz(env, await sourceRow(), fetcher, now);
+    const used = Number(await env.CACHE.get("backfill-rows"));
+    expect(used).toBeGreaterThan(200 * 4);
+    const keys = await env.CACHE.list();
+    const midnight = Math.floor(now / 86400) * 86400 + 86400;
+    expect(
+      keys.keys.find((key) => key.name === "backfill-rows")?.expiration,
+    ).toBe(midnight);
+  });
+
+  it("keeps pulling the current page while the backfill is capped", async () => {
+    await seedUser({ cursor: now, backfill_before: now - 1 });
+    await env.CACHE.put("backfill-rows", "60000");
+    const page = listens.map((listen, index) => ({
+      ...listen,
+      listened_at: now - index,
+    }));
+    const fetcher = async () => listensBody(page);
+    const result = await pullListenBrainz(env, await sourceRow(), fetcher, now);
+    expect(result.inserted).toBe(page.length);
+    expect(await count("plays")).toBe(page.length);
+    const used = Number(await env.CACHE.get("backfill-rows"));
+    expect(used).toBe(60000);
+  });
+
   it("pulls only one due source in one tick", async () => {
     await env.DB.prepare(
       `WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 4)
