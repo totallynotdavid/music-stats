@@ -19,57 +19,17 @@ interface PlayRow {
   kind: string;
 }
 
-const playsSql = `
-  SELECT plays.played_at AS at,
-    plays.source_id AS sourceId,
-    plays.ref,
-    plays.track_id AS trackId,
-    plays.dup,
-    sources.kind
-  FROM plays
-  JOIN sources ON sources.id = plays.source_id
-  WHERE plays.user_id = ?1 AND plays.track_id = ?2
-    AND plays.played_at BETWEEN ?3 AND ?4
-  ORDER BY plays.played_at, plays.source_id, plays.ref
+const sourcesSql = `
+  SELECT id, kind FROM sources WHERE user_id = ?1
 `;
 
-const touchedSql = `
-  SELECT track_id AS id, MIN(played_at) AS lo, MAX(played_at) AS hi
+const spanSql = `
+  SELECT played_at AS at, source_id AS sourceId, ref,
+    track_id AS trackId, dup
   FROM plays
   WHERE user_id = ?1 AND played_at BETWEEN ?2 AND ?3
-  GROUP BY track_id
+  ORDER BY played_at, source_id, ref
 `;
-
-const extendSql = `
-  SELECT 'lo' AS k, MAX(played_at) AS v
-  FROM plays
-  WHERE user_id = ?1 AND track_id = ?2
-    AND played_at >= ?3 AND played_at < ?4
-  UNION ALL
-  SELECT 'hi', MIN(played_at)
-  FROM plays
-  WHERE user_id = ?1 AND track_id = ?2
-    AND played_at > ?5 AND played_at <= ?6
-  UNION ALL
-  SELECT 'ym', MIN(plays.played_at)
-  FROM plays
-  JOIN sources ON sources.id = plays.source_id
-  WHERE plays.user_id = ?1 AND plays.track_id = ?2
-    AND sources.kind = 'ytmusic' AND plays.played_at BETWEEN ?7 AND ?8
-  UNION ALL
-  SELECT 'yx', MAX(plays.played_at)
-  FROM plays
-  JOIN sources ON sources.id = plays.source_id
-  WHERE plays.user_id = ?1 AND plays.track_id = ?2
-    AND sources.kind = 'ytmusic' AND plays.played_at BETWEEN ?7 AND ?8
-`;
-
-async function batchAll(db: D1Database, stmts: D1PreparedStatement[]) {
-  const out: D1Result[] = [];
-  for (let index = 0; index < stmts.length; index += 40)
-    out.push(...(await db.batch(stmts.slice(index, index + 40))));
-  return out;
-}
 
 const markSql = `
   UPDATE plays SET dup = 1
@@ -81,6 +41,91 @@ const markSql = `
       FROM json_each(?2) AS item
     )
 `;
+
+const dayFloor = (at: number) => Math.floor(at / daySeconds) * daySeconds;
+const dayEnd = (at: number) =>
+  (Math.floor(at / daySeconds) + 1) * daySeconds - 1;
+
+function firstWhere<T>(list: T[], pred: (item: T) => boolean) {
+  let lo = 0;
+  let hi = list.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (pred(list[mid])) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
+}
+
+interface TrackSpan {
+  plays: PlayRow[];
+  earlier: PlayRow[];
+  ym: number[];
+  ymEarlier: number[];
+  lo: number;
+  hi: number;
+  left: number;
+  right: number;
+  settled: boolean;
+}
+
+function ytBounds(span: TrackSpan) {
+  const lo = dayFloor(span.lo);
+  const hi = dayEnd(span.hi);
+  let min: number | undefined;
+  let max: number | undefined;
+  const i0 = firstWhere(span.ym, (a) => a >= lo);
+  const i1 = firstWhere(span.ym, (a) => a > hi);
+  if (i0 < i1) {
+    min = span.ym[i0];
+    max = span.ym[i1 - 1];
+  }
+  const j0 = firstWhere(span.ymEarlier, (a) => a <= hi);
+  const j1 = firstWhere(span.ymEarlier, (a) => a < lo);
+  if (j0 < j1) {
+    const y0 = span.ymEarlier[j1 - 1];
+    const y1 = span.ymEarlier[j0];
+    if (min === undefined || y0 < min) min = y0;
+    if (max === undefined || y1 > max) max = y1;
+  }
+  if (min === undefined || max === undefined) return undefined;
+  return [min, max] as const;
+}
+
+function extendSpan(span: TrackSpan) {
+  let moved = true;
+  while (moved) {
+    moved = false;
+    while (span.left < span.earlier.length) {
+      const at = span.earlier[span.left].at;
+      if (at < span.lo - pairWindowSeconds) break;
+      if (at < span.lo) {
+        span.lo = at;
+        moved = true;
+      }
+      span.left += 1;
+    }
+    while (span.right < span.plays.length) {
+      const at = span.plays[span.right].at;
+      if (at > span.hi + pairWindowSeconds) break;
+      if (at > span.hi) {
+        span.hi = at;
+        moved = true;
+      }
+      span.right += 1;
+    }
+    const days = ytBounds(span);
+    if (days !== undefined) {
+      const lo = Math.min(span.lo, dayFloor(days[0]));
+      const hi = Math.max(span.hi, dayEnd(days[1]));
+      if (lo !== span.lo || hi !== span.hi) {
+        span.lo = lo;
+        span.hi = hi;
+        moved = true;
+      }
+    }
+  }
+}
 
 function pairPlays(anchors: PlayRow[], seekers: PlayRow[]): PlayRow[] {
   const candidatesOf = new Map<PlayRow, number[]>();
@@ -134,71 +179,99 @@ export async function markDuplicates(
   from: number,
   to: number,
 ): Promise<MarkResult> {
-  const touched = (
+  const sourceKinds = new Map<number, string>();
+  for (const row of (
     await db
-      .prepare(touchedSql)
-      .bind(userId, from, to)
-      .all<{ id: number; lo: number; hi: number }>()
-  ).results;
-  if (touched.length === 0) return { marked: 0, rowsWritten: 0 };
-  const bounds = new Map(
-    touched.map((row) => [row.id, { lo: row.lo, hi: row.hi }]),
-  );
-  const pending = new Map(bounds);
-  while (pending.size > 0) {
-    const work = [...pending.entries()];
-    const out = await batchAll(
-      db,
-      work.map(([id, b]) =>
-        db
-          .prepare(extendSql)
-          .bind(
-            userId,
-            id,
-            b.lo - pairWindowSeconds,
-            b.lo,
-            b.hi,
-            b.hi + pairWindowSeconds,
-            Math.floor(b.lo / daySeconds) * daySeconds,
-            (Math.floor(b.hi / daySeconds) + 1) * daySeconds - 1,
-          ),
-      ),
-    );
-    pending.clear();
-    for (const [index, [id, b]] of work.entries()) {
-      const rows = out[index].results as { k: string; v: number | null }[];
-      const at = (key: string) => rows.find((row) => row.k === key)?.v;
-      const lo = at("lo");
-      const hi = at("hi");
-      const ym = at("ym");
-      const yx = at("yx");
-      const oldLo = b.lo;
-      const oldHi = b.hi;
-      if (lo !== null && lo !== undefined) b.lo = lo;
-      if (hi !== null && hi !== undefined) b.hi = hi;
-      if (ym !== null && ym !== undefined && yx !== null && yx !== undefined) {
-        b.lo = Math.min(b.lo, Math.floor(ym / daySeconds) * daySeconds);
-        b.hi = Math.max(
-          b.hi,
-          (Math.floor(yx / daySeconds) + 1) * daySeconds - 1,
-        );
+      .prepare(sourcesSql)
+      .bind(userId)
+      .all<{ id: number; kind: string }>()
+  ).results)
+    sourceKinds.set(row.id, row.kind);
+  const read = async (lo: number, hi: number) => {
+    const rows = (await db.prepare(spanSql).bind(userId, lo, hi).all<PlayRow>())
+      .results;
+    const plays: PlayRow[] = [];
+    for (const row of rows) {
+      const kind = sourceKinds.get(row.sourceId);
+      if (kind !== undefined) plays.push({ ...row, kind });
+    }
+    return plays;
+  };
+  const grouped = new Map<number, PlayRow[]>();
+  for (const play of await read(from, to)) {
+    const group = grouped.get(play.trackId);
+    if (group) group.push(play);
+    else grouped.set(play.trackId, [play]);
+  }
+  if (grouped.size === 0) return { marked: 0, rowsWritten: 0 };
+  const spans = new Map<number, TrackSpan>();
+  for (const [id, plays] of grouped)
+    spans.set(id, {
+      plays,
+      earlier: [],
+      ym: plays
+        .filter((play) => play.kind === "ytmusic")
+        .map((play) => play.at),
+      ymEarlier: [],
+      lo: plays[0].at,
+      hi: plays[plays.length - 1].at,
+      left: 0,
+      right: plays.length,
+      settled: false,
+    });
+  const covered = { lo: from, hi: to };
+  const merge = (list: PlayRow[], before: boolean) => {
+    if (before)
+      for (let index = list.length - 1; index >= 0; index -= 1) {
+        const play = list[index];
+        const span = spans.get(play.trackId);
+        if (span === undefined || span.settled) continue;
+        span.earlier.push(play);
+        if (play.kind === "ytmusic") span.ymEarlier.push(play.at);
       }
-      if (b.lo !== oldLo || b.hi !== oldHi) pending.set(id, b);
+    else
+      for (const play of list) {
+        const span = spans.get(play.trackId);
+        if (span === undefined || span.settled) continue;
+        span.plays.push(play);
+        if (play.kind === "ytmusic") span.ym.push(play.at);
+      }
+  };
+  for (;;) {
+    let needLo = covered.lo;
+    let needHi = covered.hi;
+    for (const span of spans.values()) {
+      if (span.settled) continue;
+      extendSpan(span);
+      const lo = Math.min(span.lo - pairWindowSeconds, dayFloor(span.lo));
+      const hi = Math.max(span.hi + pairWindowSeconds, dayEnd(span.hi));
+      if (lo >= covered.lo && hi <= covered.hi) {
+        span.settled = true;
+        continue;
+      }
+      needLo = Math.min(needLo, lo);
+      needHi = Math.max(needHi, hi);
+    }
+    if (needLo >= covered.lo && needHi <= covered.hi) break;
+    if (needLo < covered.lo) {
+      merge(await read(needLo, covered.lo - 1), true);
+      covered.lo = needLo;
+    }
+    if (needHi > covered.hi) {
+      merge(await read(covered.hi + 1, needHi), false);
+      covered.hi = needHi;
     }
   }
-  const plays: PlayRow[] = [];
-  for (const result of await batchAll(
-    db,
-    [...bounds].map(([id, b]) =>
-      db.prepare(playsSql).bind(userId, id, b.lo, b.hi),
-    ),
-  ))
-    plays.push(...(result.results as unknown as PlayRow[]));
   const byTrack = new Map<number, PlayRow[]>();
-  for (const play of plays) {
-    const group = byTrack.get(play.trackId);
-    if (group) group.push(play);
-    else byTrack.set(play.trackId, [play]);
+  for (const [id, span] of spans) {
+    const plays =
+      span.earlier.length === 0
+        ? span.plays
+        : span.earlier.reverse().concat(span.plays);
+    const group = plays.filter(
+      (play) => play.at >= span.lo && play.at <= span.hi,
+    );
+    if (group.length > 0) byTrack.set(id, group);
   }
   const losers = new Set<PlayRow>();
   for (const group of byTrack.values()) {

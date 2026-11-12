@@ -77,6 +77,47 @@ async function hash(value: string) {
   );
 }
 
+function countedDb() {
+  const counts = { rowsRead: 0, rowsWritten: 0 };
+  const reals = new WeakMap<object, D1PreparedStatement>();
+  const count = (result: D1Result) => {
+    counts.rowsRead += result.meta?.rows_read ?? 0;
+    counts.rowsWritten += result.meta?.rows_written ?? 0;
+  };
+  const wrapBound = (bound: D1PreparedStatement): D1PreparedStatement => {
+    const fake = {
+      bind: (...args: unknown[]) =>
+        wrapBound(bound.bind(...(args as [unknown]))),
+      all: async <T = unknown>() => {
+        const result = await bound.all<T>();
+        count(result);
+        return result;
+      },
+      first: async <T = unknown>(column?: string) =>
+        column === undefined ? bound.first<T>() : bound.first<T>(column),
+      run: async () => {
+        const result = await bound.run();
+        count(result);
+        return result;
+      },
+      raw: async <T = unknown>(options?: never) => bound.raw<T>(options),
+    } as unknown as D1PreparedStatement;
+    reals.set(fake, bound);
+    return fake;
+  };
+  const db = {
+    prepare: (sql: string) => wrapBound(env.DB.prepare(sql)),
+    batch: async (stmts: D1PreparedStatement[]) => {
+      const results = await env.DB.batch(
+        stmts.map((stmt) => reals.get(stmt) ?? stmt),
+      );
+      for (const result of results) count(result);
+      return results;
+    },
+  } as unknown as D1Database;
+  return { db, counts };
+}
+
 async function sourceRow(kind: string) {
   const row = await env.DB.prepare("SELECT * FROM sources WHERE id = ?1")
     .bind(sourceIds[kind])
@@ -391,6 +432,94 @@ describe("markDuplicates", () => {
     const flags = await dupByRef();
     expect(flags.get("fm1")).toBe(0);
     expect(flags.get("other")).toBe(0);
+  });
+
+  it("reads a span over many tracks once", async () => {
+    const trackCount = 1000;
+    const days = 10;
+    const start = Math.floor(noon / daySeconds) * daySeconds - 9 * daySeconds;
+    const end = start + days * daySeconds;
+    await env.DB.prepare(
+      "INSERT INTO users (id, github_id, name, created_at) VALUES (1, 1, 'alice', ?1)",
+    )
+      .bind(now)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO artists (id, key, name) VALUES (1, 'artistone', 'Artist One')",
+    ).run();
+    await env.DB.prepare(
+      `WITH RECURSIVE n(x) AS
+         (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < ${trackCount})
+       INSERT INTO tracks (id, key, artist_id, title)
+       SELECT x, 'artistone' || char(31) || 'song' || x, 1, 'Song ' || x FROM n`,
+    ).run();
+    for (const kind of ["lastfm", "ytmusic"])
+      await env.DB.prepare(
+        "INSERT INTO sources (id, user_id, kind, account) VALUES (?1, 1, ?2, ?3)",
+      )
+        .bind(
+          sourceIds[kind],
+          kind,
+          kind === "ytmusic" ? null : `alice-${kind}`,
+        )
+        .run();
+    for (const shift of [0, 40000])
+      await env.DB.prepare(
+        `WITH RECURSIVE n(x) AS
+           (SELECT 0 UNION ALL SELECT x + 1 FROM n
+            WHERE x < ${trackCount * days - 1})
+         INSERT INTO plays (user_id, played_at, source_id, ref, track_id)
+         SELECT 1, ?1 + (x / ${trackCount}) * ${daySeconds}
+                  + (x % ${trackCount}) * 40 + ?2,
+                ${sourceIds.lastfm}, 'f' || x || '-' || ?2,
+                x % ${trackCount} + 1 FROM n`,
+      )
+        .bind(start, shift)
+        .run();
+    await env.DB.prepare(
+      `WITH RECURSIVE n(x) AS
+         (SELECT 0 UNION ALL SELECT x + 1 FROM n
+          WHERE x < ${trackCount * 2 - 1})
+       INSERT INTO plays (user_id, played_at, source_id, ref, track_id)
+       SELECT 1, ?1 + (x / ${trackCount}) * ${days - 1} * ${daySeconds}
+                + (x % ${trackCount}) * 40 + 1,
+              ${sourceIds.ytmusic}, 'y' || x, x % ${trackCount} + 1 FROM n`,
+    )
+      .bind(start)
+      .run();
+    await env.DB.prepare(
+      "INSERT INTO tracks (id, key, artist_id, title) VALUES (1001, 'artistone' || char(31) || 'midnight', 1, 'Midnight')",
+    ).run();
+    await env.DB.prepare(
+      `WITH RECURSIVE n(x) AS
+         (SELECT 0 UNION ALL SELECT x + 1 FROM n WHERE x < ${days - 1})
+       INSERT INTO plays (user_id, played_at, source_id, ref, track_id)
+       SELECT 1, ?1 + x * ${daySeconds} + t.at, t.s,
+              'm' || x || '-' || t.o, ${trackCount + 1}
+       FROM n,
+         (SELECT 86100 AS at, ${sourceIds.ytmusic} AS s, 'a' AS o
+          UNION ALL SELECT 86200, ${sourceIds.lastfm}, 'b'
+          UNION ALL SELECT 300, ${sourceIds.ytmusic}, 'c'
+          UNION ALL SELECT 400, ${sourceIds.lastfm}, 'd') AS t`,
+    )
+      .bind(start)
+      .run();
+    const { db, counts } = countedDb();
+    const result = await markDuplicates(
+      db,
+      1,
+      start + (days - 1) * daySeconds,
+      end - 1,
+    );
+    const span = await env.DB.prepare(
+      `SELECT COUNT(*) AS plays,
+              SUM(dup) AS marked
+       FROM plays WHERE user_id = 1`,
+    ).first<{ plays: number; marked: number }>();
+    expect(span!.marked).toBe(1020);
+    expect(result.marked).toBe(span!.marked);
+    expect(counts.rowsRead).toBeLessThan(3 * span!.plays + 1000);
+    expect(counts.rowsWritten).toBe(result.rowsWritten);
   });
 });
 
