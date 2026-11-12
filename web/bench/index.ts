@@ -14,6 +14,7 @@ import {
   ResponseSchema,
   storeListensPage,
 } from "../src/listenbrainz";
+import { markDuplicates } from "../src/duplicates";
 import { resolvePageTracks } from "../src/matching";
 import type { Env, SourceRow } from "../src/types";
 import fixture from "../test/fixtures/listens-rob.json";
@@ -174,6 +175,93 @@ async function run(
   return runs;
 }
 
+const dupUserId = -3;
+const dupAnchorSourceId = -3;
+const dupLoserSourceId = -4;
+
+async function seedDups(db: D1Database, kind: string) {
+  const now = Math.floor(Date.now() / 1000);
+  await db.batch([
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO users (id, github_id, name, created_at)
+         VALUES (?1, ?1, '_dups', ?2)`,
+      )
+      .bind(dupUserId, now),
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO sources (id, user_id, kind, account)
+         VALUES (?1, ?2, 'listenbrainz', 'dups')`,
+      )
+      .bind(dupAnchorSourceId, dupUserId),
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO sources (id, user_id, kind, account)
+         VALUES (?1, ?2, ?3, 'dups')`,
+      )
+      .bind(dupLoserSourceId, dupUserId, kind),
+    db
+      .prepare("UPDATE sources SET kind = ?1 WHERE id = ?2")
+      .bind(kind, dupLoserSourceId),
+  ]);
+  await db
+    .prepare("DELETE FROM plays WHERE user_id = ?1")
+    .bind(dupUserId)
+    .run();
+  await db
+    .prepare(
+      `WITH RECURSIVE n(x) AS (
+       SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x <= 50
+     )
+     INSERT OR IGNORE INTO artists (id, key, name)
+       SELECT x, 'dartist-' || x, 'Artist ' || x FROM n`,
+    )
+    .run();
+  await db
+    .prepare(
+      `WITH RECURSIVE n(x) AS (
+       SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x <= 500
+     )
+     INSERT OR IGNORE INTO tracks (id, key, artist_id, title)
+       SELECT x, 'dtrack-' || x, 1 + (x % 50), 'Track ' || x FROM n`,
+    )
+    .run();
+  const dayStart = Math.floor(now / 86400) * 86400;
+  const anchorTime =
+    kind === "ytmusic" ? "?2 - x * 86400 + 72000" : "?2 - x * 600 - 5";
+  const loserTime =
+    kind === "ytmusic" ? "?2 - x * 86400 + 43200" : "?2 - x * 600";
+  const base = kind === "ytmusic" ? dayStart : now;
+  for (const [time, sourceId, dup] of [
+    [anchorTime, dupAnchorSourceId, "0"],
+    [loserTime, dupLoserSourceId, "CASE WHEN x > 200 THEN 1 ELSE 0 END"],
+  ] as const)
+    await db
+      .prepare(
+        `WITH RECURSIVE n(x) AS (
+         SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x <= 5000
+       )
+       INSERT INTO plays (user_id, played_at, source_id, ref, track_id, dup)
+         SELECT ?1, ${time}, ?3, 'p' || x, 1 + (x % 500), ${dup} FROM n`,
+      )
+      .bind(dupUserId, base, sourceId)
+      .run();
+}
+
+async function dupLoserRange(db: D1Database) {
+  return db
+    .prepare(
+      `SELECT MIN(played_at) AS f, MAX(played_at) AS t FROM plays
+       WHERE user_id = ?1 AND source_id = ?2 AND played_at >= (
+         SELECT played_at FROM plays
+         WHERE user_id = ?1 AND source_id = ?2
+         ORDER BY played_at DESC LIMIT 1 OFFSET 199
+       )`,
+    )
+    .bind(dupUserId, dupLoserSourceId)
+    .first<{ f: number; t: number }>();
+}
+
 function repeatOf(url: URL) {
   const n = Number(url.searchParams.get("repeat") ?? "1");
   return Math.min(Math.max(Math.floor(n) || 1, 1), 20);
@@ -306,6 +394,34 @@ export default {
         } finally {
           await parkBenchSources(env.DB);
         }
+      case "/dups-seed":
+        await seedDups(env.DB, url.searchParams.get("kind") ?? "lastfm");
+        return new Response("seeded\n");
+      case "/dups-reset": {
+        const result = await env.DB.prepare(
+          `UPDATE plays SET dup = 0
+           WHERE user_id = ?1 AND source_id = ?2 AND played_at >= (
+             SELECT played_at FROM plays
+             WHERE user_id = ?1 AND source_id = ?2
+             ORDER BY played_at DESC LIMIT 1 OFFSET 199
+           )`,
+        )
+          .bind(dupUserId, dupLoserSourceId)
+          .run();
+        return Response.json({ reset: result.meta?.changes ?? 0 });
+      }
+      case "/dups": {
+        const range = await dupLoserRange(env.DB);
+        if (range === null)
+          return new Response("run /dups-seed first\n", { status: 400 });
+        const result = await markDuplicates(
+          env.DB,
+          dupUserId,
+          range.f,
+          range.t,
+        );
+        return Response.json(result);
+      }
       case "/reset":
         await reset(env.DB);
         return new Response("reset\n");
