@@ -58,6 +58,34 @@ and add these repository secrets:
 The deploy workflow reads these names. It does not store their values in the
 repository.
 
+## Register the GitHub OAuth App
+
+Sign-in uses a GitHub OAuth App with no scopes. Register it under the account
+that owns the deployment: open **Settings → Developer settings → OAuth Apps →
+New OAuth App** and fill in:
+
+- **Application name:** `music-stats`
+- **Homepage URL:** `https://music.rising.sh`
+- **Authorization callback URL:** `https://music.rising.sh/auth/github/callback`
+
+Copy the client id and generate a client secret on the app's page, then store
+both as Worker secrets, from `web/`:
+
+```sh
+npx wrangler secret put GITHUB_CLIENT_ID
+npx wrangler secret put GITHUB_CLIENT_SECRET
+```
+
+Local `wrangler dev` needs its own OAuth App, because an OAuth App has one
+callback URL. Register a second app with the same name and homepage and the
+callback `http://localhost:8787/auth/github/callback`, and put its values in
+`web/.dev.vars`, which is not committed:
+
+```sh
+GITHUB_CLIENT_ID=the-local-client-id
+GITHUB_CLIENT_SECRET=the-local-client-secret
+```
+
 ## Attach the custom domain
 
 The `routes` entry in `web/wrangler.jsonc` attaches `music.rising.sh` as a
@@ -75,10 +103,10 @@ Routes**.
 
 ## Add a ListenBrainz user
 
-The first milestone has no sign-in flow. Add a public user and its source with
-one command against the remote D1 database. `github_id` is an operator-supplied
-numeric identifier, `name` is the public URL name, and `created_at` is the
-current Unix timestamp. Run it from `web/`:
+Users sign in with GitHub and connect a source on the settings page. To add a
+public user by hand instead, run one command against the remote D1 database.
+`github_id` is an operator-supplied numeric identifier, `name` is the public URL
+name, and `created_at` is the current Unix timestamp. Run it from `web/`:
 
 ```sh
 npx wrangler d1 execute music-stats --remote --command \

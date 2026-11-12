@@ -81,6 +81,7 @@ only what a query reads.
 CREATE TABLE users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   github_id INTEGER NOT NULL UNIQUE,
+  github_login TEXT,
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
   is_public INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL
@@ -743,20 +744,26 @@ sign-in screen states that profiles are public.
 **Deleting data.** The settings page has two actions.
 
 - **Remove a source.** One `db.batch()` deletes that source's `plays`, its
-  `tokens` and the `sources` row, then recounts the totals tables for the user.
-  The Spotify refresh token goes with the row. The user can also revoke the app
-  in their Spotify account.
+  `tokens` and the `sources` row, then recounts `track_totals`, `daily_totals`
+  and `artist_totals` for the user. The Spotify refresh token goes with the row.
+  The user can also revoke the app in their Spotify account.
 - **Delete the account.** The user types their name to confirm. One batch
-  deletes `plays`, the totals tables, `tokens`, `sources`, `sessions` and the
-  `users` row, in that order, so no foreign key fails. No cascade is declared,
-  so D1 never scans a table to find children. Cached snapshots in KV are keyed
-  by the user id, which is never reused, and expire within a day.
+  deletes `plays`, `track_totals`, `daily_totals`, `artist_totals`, `tokens`,
+  `sources`, `sessions` and the `users` row, in that order, so no foreign key
+  fails. No cascade is declared, so D1 never scans a table to find children.
+  Cached snapshots in KV are keyed by the user id, which is never reused, and
+  expire within a day.
 - D1 Time Travel keeps restore points for 7 days on the Free plan and 30 days on
   Paid ([limits](https://developers.cloudflare.com/d1/platform/limits/)).
   Deleted rows leave the restore points with them. The privacy text says so.
-- **Export.** `GET /settings/export` streams the user's plays as NDJSON, one
-  play per line, in pages of 5,000 rows by key, so the 50 MB D1 result limit is
-  never near.
+- **Export.** `GET /settings/export` answers the user's plays as NDJSON, one
+  play per line, in pages of 1,000 rows by key. A full page carries a
+  `Link: rel="next"` header whose `?after=` query resumes at the next key, so
+  the client downloads page after page and the 50 MB D1 result limit and the CPU
+  budget are never near. The settings page's download control runs a small
+  inline script that follows the next links and saves the joined pages as
+  `music-stats-NAME.ndjson`; the plain link keeps working for curl, which reads
+  the Link header itself.
 
 ## Public surface
 
