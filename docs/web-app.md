@@ -875,15 +875,18 @@ the `web/bench/` worker, which splits a pull into one route per stage.
    no source due at 1 to 2 ms. Every pull tick is over the 10 ms limit, and the
    cost barely moves with page size, so most of it is fixed per invocation, not
    per listen: the local bench measures about 1.2 ms of JavaScript for the same
-   200-listen page. The bench's own tail on 2026-11-12 measured the stages, in
-   `cpuTime`: the empty handler 0 ms, `JSON.parse` of the page 0 to 7 ms, the
-   valibot parse 3 to 6 ms, `resolvePageTracks` 6 to 12 ms, the store step with
-   its D1 batch 6 to 17 ms, a pull with a fixture fetcher 5 to 17 ms, and a pull
-   with a real fetch 4 to 28 ms, with a warm isolate repeating the real pull at
-   4 to 11 ms. Deployed cost runs 5 to 10 times the local figures. The fetch and
-   the JSON parse are not the cost; track resolution, the D1 batch and its
-   result decoding are, and a cold isolate adds more. A warm pull lands at 4 to
-   13 ms, at or over the 10 ms limit. The upload path shares the matching code:
+   200-listen page. A 200-track Last.fm page measures the same locally: about 1
+   ms of JavaScript for new and for stored plays, and 8 to 12 ms through local
+   D1 against 7 to 8 ms for the ListenBrainz page (`web/test/bench.test.ts`).
+   The bench's own tail on 2026-11-12 measured the stages, in `cpuTime`: the
+   empty handler 0 ms, `JSON.parse` of the page 0 to 7 ms, the valibot parse 3
+   to 6 ms, `resolvePageTracks` 6 to 12 ms, the store step with its D1 batch 6
+   to 17 ms, a pull with a fixture fetcher 5 to 17 ms, and a pull with a real
+   fetch 4 to 28 ms, with a warm isolate repeating the real pull at 4 to 11 ms.
+   Deployed cost runs 5 to 10 times the local figures. The fetch and the JSON
+   parse are not the cost; track resolution, the D1 batch and its result
+   decoding are, and a cold isolate adds more. A warm pull lands at 4 to 13 ms,
+   at or over the 10 ms limit. The upload path shares the matching code:
    `wrangler tail` measured 9 ms CPU for an upload of 200 plays on new tracks
    and 1 to 3 ms for 3-play uploads, and the same local measure is about 0.95
    ms. How many pulls a day the Free plan sustains, and so how many users the
