@@ -523,6 +523,308 @@ for a top-five list and wrong for a ledger, so they are left out of the upload.
 A daily run sees every play under "Today" or "Yesterday" first, so only plays
 older than the first upload are lost.
 
+### File imports
+
+Spotify's recently-played endpoint holds 50 plays and the YouTube history page
+about 200. Two files reach further back: Spotify's extended streaming history
+and the watch history of Google Takeout. Both carry a time per play and no
+credential. A signed-in user selects them on the settings page. The browser
+reads the files and posts small batches, so the file never leaves the browser.
+
+```text
+file ── browser: parse, keep, sort ── POST /settings/import, 100 plays ──▶ Worker ──▶ D1
+```
+
+#### The two files
+
+**Spotify.** The user asks for "Extended streaming history" in the privacy
+settings of their Spotify account, unzips the archive, and selects the
+`Streaming_History_Audio_*.json` files. Each file is a JSON array with one
+record per stream.
+[Spotify's data page](https://support.spotify.com/us/article/understanding-my-data/)
+describes the fields. The page reads six:
+
+| Field                               | Use                                                              |
+| ----------------------------------- | ---------------------------------------------------------------- |
+| `ts`                                | When the stream ended, UTC, `YYYY-MM-DDTHH:MM:SSZ`.              |
+| `ms_played`                         | Milliseconds played. `ts` minus this is the start of the play.   |
+| `spotify_track_uri`                 | `spotify:track:` and a 22-character id. It is the alias key.     |
+| `master_metadata_track_name`        | The title.                                                       |
+| `master_metadata_album_artist_name` | The artist. The file holds the album artist and no track artist. |
+| `incognito_mode`                    | True for a play in a private session.                            |
+
+Every other field is ignored: `platform`, `conn_country`, `ip_addr`, the album
+name, `episode_*`, `audiobook_*`, `spotify_episode_uri`, `reason_start`,
+`reason_end`, `shuffle`, `skipped`, `offline` and `offline_timestamp`. The
+`ip_addr` of a record never leaves the browser. A record is kept when all of
+these hold:
+
+1. `spotify_track_uri` matches `^spotify:track:[A-Za-z0-9]{22}$`. A podcast
+   episode, an audiobook and a local file fail it.
+2. The track name and the artist name are non-empty strings. Spotify leaves them
+   null when it no longer holds the metadata.
+3. `ms_played` is at least 30,000. Spotify counts a stream from 30 seconds
+   ([how streams are counted](https://support.spotify.com/artists/article/how-we-count-streams/)).
+   The Spotify importer of ListenBrainz drops a play under 30 seconds that the
+   user skipped
+   ([source](https://github.com/metabrainz/listenbrainz-server/blob/master/listenbrainz/background/listens_importer/spotify.py)).
+4. `incognito_mode` is not true. A private session is a play the user asked
+   Spotify not to show, and a public profile must not show it.
+
+The stored time is `ts` minus `ms_played / 1000`, in whole seconds. Every other
+source stores a start, and the pairing window of
+[Cross-source duplicates](#cross-source-duplicates) is built for a start. A file
+whose first record lacks `ms_played` or `spotify_track_uri` is refused, for
+example a video history file.
+
+**YouTube Music.** The user opens Google Takeout, selects "YouTube and YouTube
+Music", chooses only "history", changes its format from HTML to JSON, unzips the
+archive, and selects
+`Takeout/YouTube and YouTube Music/history/watch-history.json`
+([guide](https://rafaaseddik.github.io/youtube-wrap/guide.html)). The file is a
+JSON array of "My Activity" records
+([schema](https://developers.google.com/data-portability/schema-reference/my_activity)).
+It holds YouTube and YouTube Music watches together. The page reads five fields:
+
+| Field       | Use                                                                      |
+| ----------- | ------------------------------------------------------------------------ |
+| `header`    | The product. `YouTube Music` marks a music play.                         |
+| `titleUrl`  | `https://music.youtube.com/watch?v=<video id>`. The id is the alias key. |
+| `title`     | `Watched ` and the title.                                                |
+| `subtitles` | The first item's `name` is the channel, which is the artist.             |
+| `time`      | When the user did the activity, UTC, with milliseconds.                  |
+
+Every other field is ignored: `description`, `products`, `activityControls`,
+`details` and the channel `url`. A record is kept when all of these hold:
+
+1. `header` is exactly `YouTube Music`.
+2. `titleUrl` parses, with the platform URL parser, to the host
+   `music.youtube.com`, the path `/watch` and a `v` value of 1 to 32 characters
+   from `A-Za-z0-9_-`. A video that Google has since removed has no `titleUrl`.
+3. `title` starts with `Watched ` and holds text after it, and
+   `subtitles[0].name` is a non-empty string. A music record can carry its own
+   URL as the title and have no `subtitles`. It fails here.
+4. `time` is a date between 2005-01-01 and tomorrow in UTC, the bound of the
+   upload API.
+
+The artist goes through the same matching as a pushed play, so a channel named
+`Amrinder Gill - Topic` loses its suffix ([Song matching](#4-song-matching)). A
+music video's channel can be a label, as it is on the push path. Takeout holds
+no play length, so the page keeps every record: a track skipped after a second
+counts, as it does in the history page that the push path reads. The stored time
+is `time` in whole seconds. The export is read in English: the `Watched ` verb
+is not translated by this design, so a record without it is skipped, and the
+page counts it as such. Whether Takeout translates the verb is unverified.
+
+The page shows its counts before it uploads anything: plays kept, and plays
+skipped with the rule that dropped each one.
+
+#### From the file to D1
+
+The Worker cannot read a file. A 100,000-play Spotify history is about 63 MB
+(about 630 bytes a record in a public sample) and a Takeout history about 35 MB
+(about 350 bytes a record), while section 6 measures 0 to 7 ms of CPU to parse
+one 200-listen page, and the Free plan allows 10 ms. The cron cannot drain a
+staged copy either: a pull tick already measures 16 to 24 ms of CPU. So the
+browser does the parsing, and the Worker sees only the plays it keeps.
+
+`web/public/import-parse.js` holds the two keep rules as pure functions, and
+`web/public/import.js` holds the page: it reads one file at a time with
+`File.text()` and `JSON.parse`, keeps the plays, sorts them newest first, and
+posts them in order. The page takes `.json` files only. A ZIP needs a library,
+and the user unzips once. The settings page serves both scripts as static
+assets, which cost no Worker request.
+
+```http
+POST /settings/import
+Content-Type: application/json
+
+{
+  "source": "spotify",
+  "plays": [
+    {"at": 1713636922, "id": "1U8rhryVYw9gWZ6zvw4Orc",
+     "artist": "OAFF", "title": "Beqaaboo"}
+  ]
+}
+```
+
+```json
+{
+  "received": 100,
+  "inserted": 97,
+  "duplicate": 3,
+  "used": 41210,
+  "limit": 50000
+}
+```
+
+- **Who.** The session cookie and the origin check of
+  [section 5](#5-accounts-and-deletion). The route sits in `settingsApp`, which
+  already makes both checks.
+- **Body.** `source` is `spotify` or `ytmusic`. `plays` holds 1 to
+  `importBatchSize` (100) items. `at` is an integer between 2005-01-01 and
+  tomorrow. `id` is 22 characters from `A-Za-z0-9` for `spotify`, and 1 to 32
+  from `A-Za-z0-9_-` for `ytmusic`. `artist` and `title` hold 1 to 512
+  characters, and the page cuts a longer text. The body is at most 64 KiB, and
+  the `Content-Type` must be `application/json`. A body that fails gets `422`
+  with the item indexes and nothing is stored.
+- **Batch size.** 100 plays. [Section 6](#6-limits-and-costs) records 9 ms of
+  CPU for an upload of 200 plays on new tracks, and the Free limit is 10 ms. A
+  batch of 100 leaves room for the source upsert and the marking. Milestone 8
+  measures the batch on the deployed Worker and lowers the constant if it takes
+  more than 8 ms.
+- **Steps.** (1) Read the tally `backfill-rows`. At the limit the answer is
+  `429` with `Retry-After` set to the seconds left to 00:00 UTC, and nothing is
+  stored. (2) Upsert the user's import source, `spotify_import` or
+  `ytmusic_import`, and read its id. (3) `storeListens` with matching kind
+  `spotify` or `ytmusic`. (4) `markDuplicates` over the span of the batch, with
+  the entry point milestone 6 gives it. (5) Add the rows written by steps 3 and
+  4 to the tally. The check happens before the write, so a batch that starts
+  under the limit can end up to one batch over it, about 940 rows.
+- **Retry.** A failed batch is sent again. The plays are ignored the second time
+  and the marking repeats over the same span, so a failure between steps 3 and 4
+  leaves no unmarked play after the retry.
+
+`storeListens` gains an optional `ref` per play, which `bulkPlaySql` writes in
+place of `''`. Nothing else in the store path changes.
+
+**Rows and the cap.** A play on a known track writes 6 rows and a play on a new
+track about 9.4 ([section 6](#6-limits-and-costs)). An imported play costs the
+same, because the table has no secondary index and a longer `ref` adds no row. A
+batch is about 600 rows, or 940 when every track is new. The imports share the
+50,000-row `backfill-rows` tally with the history walks, so a day admits 53 to
+83 batches. A history of 100,000 plays in which one play in five is on a new
+track writes 100,000 × 6 + 20,000 × 3.4 = 668,000 rows. That is about 75 batches
+a day for 14 days, 1,000 batches in all. All new tracks give 940,000 rows and 19
+days, and all known tracks 600,000 rows and 12 days. The plays that
+markDuplicates flags add the rows of its updates, which milestone 6 measures.
+While an import runs, history walks wait for the same tally and pulls of new
+plays and uploads carry on. The tally belongs to the account, not to a user, so
+on the Free plan all users share roughly 7,500 imported plays a day. The Paid
+plan lets the operator raise `maxBackfillRowsPerDay`.
+
+When the page gets `429` it stops and says that the limit is reached and when it
+resets. The user selects the same files on a later day. The page keeps in
+`localStorage`, under the sorted list of file names and sizes, the number of
+plays posted, and skips that many on the next run. The server needs none of it:
+a lost note only repeats batches that insert nothing. A batch that is repeated
+writes no `plays` row.
+
+#### What an import stores
+
+- **Source.** One `sources` row per user and kind, `spotify_import` or
+  `ytmusic_import`. It has no account, secret, cursor or schedule:
+  `next_pull_at` is null, so the cron never selects it. `last_ok_at` is the time
+  of the last batch, and `status` stays `active`. It is a separate kind because
+  the user can remove an import without touching a pulled source of the same
+  service, and because a pull and an import cannot share the cursor.
+- **Plays.** The key is `(user_id, played_at, source_id, ref)` with `ref` set to
+  the track id or the video id. A file can hold two plays that start in the same
+  second, for example when the app syncs offline plays, so the id keeps both and
+  still rejects a repeat. The same file posted again, or an export that overlaps
+  an earlier one, holds the same `ts`, `ms_played` and track, so every key
+  exists and `INSERT OR IGNORE` stores nothing. The response says `inserted` 0.
+- **Tracks.** The alias is `(spotify, <track id>)` or `(ytmusic, <video id>)`,
+  the same alias the pulled Spotify source and the push path use, so a track
+  that a pull already stored resolves to the same row. The import sends no ISRC
+  or MBID. A Spotify record carries the album artist, so a compilation track
+  creates an artist such as `Various Artists` when no pull has stored the track.
+  The file offers no better artist.
+- **Day.** The time is exact, so an imported play counts on the UTC day of its
+  time in `daily_totals`, like a pulled play. `MUSIC_STATS_TZ` is not read.
+
+**Overlap with other sources.** Both imports take part in `markDuplicates`. The
+rank order of [Cross-source duplicates](#cross-source-duplicates) becomes
+`spotify`, `spotify_import`, `listenbrainz`, `lastfm`, `ytmusic_import`,
+`ytmusic`. An import ranks directly below the pulled source of its service, so a
+user who has both keeps the live record. A Takeout play outranks a pushed one,
+because its time is exact.
+
+`ytmusic_import` pairs by window, not by day. Its time is exact, so it pairs
+with a play of any other source that has an exact time by the window rule: the
+same `track_id`, within `max(track length, 4 minutes) + 30 seconds`, or 10
+minutes when the length is unknown. The day rule stays for a `ytmusic` push
+play, which holds a day and no time. It applies when either side of a pair is a
+push play, so a push play and a Takeout play of one video on one UTC day count
+once. A day rule between two exact times would merge a morning play and an
+evening replay of one song, and both happened. A change to `duplicates.ts` after
+milestone 6 makes the day test depend on the source kind `ytmusic`, and adds the
+two kinds to its rank list.
+
+#### Removing an import
+
+Section 5 removes a source in one batch, which deletes its plays and recounts
+the user's three totals tables. For 100,000 plays that is more than the 100,000
+rows a day of the Free plan. An import is removed in chunks instead:
+
+```http
+POST /settings/import/remove
+```
+
+```json
+{ "source": "spotify", "removed": 2000, "remaining": 98000 }
+```
+
+The page repeats the request until `remaining` is 0. Each request takes the
+`removeChunkSize` (2,000) oldest plays of the source, in these steps:
+
+1. Read the tally. At the limit the answer is `429`, as for a batch of plays.
+2. One `db.batch()` does the following. It lowers `track_totals`,
+   `artist_totals` and `daily_totals` by the counts of the chunk's plays with
+   `dup = 0`, grouped by track, artist and day, and deletes a totals row that
+   reaches 0. It sets `dup = 0` on the other sources' plays that lie in the
+   chunk's span widened by the pairing window, and adds them back to the three
+   totals with the same grouped counts. It deletes the chunk's plays. When the
+   chunk is the last, it deletes the `sources` row too.
+3. `markDuplicates` over the same span, so a play that another source still
+   shadows is marked again, and a play that only the import shadowed counts.
+4. Add the rows written to the tally.
+
+The batch changes the totals together with the plays, so after step 2 the
+invariant `plays = count of rows with dup = 0` holds, and a user who stops
+halfway holds a smaller import. A failure between steps 2 and 3 leaves the plays
+of that span unmarked until a later `markDuplicates` over it, which can count a
+play twice in the meantime. The statements of step 2 write at most 6 rows for
+each play they touch, the chunk's and the reopened ones: 1 for the play, 2 for
+each of the track and artist totals rows, and 1 for the day. A chunk repeats
+tracks, artists and days, so the usual cost is lower. The bound gives 12,000
+rows a chunk, which is also the most the tally can pass its limit, and 600,000
+rows for 100,000 plays, or 12 days of the tally. The bound comes from the schema
+and is not a D1 measurement; milestone 8 measures it.
+`track_totals.last_played_at` is not corrected by a removal, and no query reads
+it.
+
+Deleting the account stays the single batch of section 5. A user with a large
+import removes it first, as above, and then deletes the account. The batch
+removes the `sources` rows of both import kinds with the others, and the import
+holds no token.
+
+#### Schema change
+
+The `kind` check of `sources` lists four values, so migration `0005_imports.sql`
+rebuilds the table with `'spotify_import'` and `'ytmusic_import'` added. SQLite
+cannot alter a check. A rename of the old table would rewrite the foreign keys
+of `plays` and `tokens` to the renamed table, and a drop with child rows fails
+the foreign key check at commit. A copy of the rows avoids both:
+
+```sql
+PRAGMA defer_foreign_keys = on;
+CREATE TABLE sources_copy AS SELECT * FROM sources;
+DROP TABLE sources;
+CREATE TABLE sources (… the columns of migrations 0001 and 0002, with
+  kind IN ('lastfm', 'listenbrainz', 'spotify', 'ytmusic',
+           'spotify_import', 'ytmusic_import') …);
+INSERT INTO sources SELECT * FROM sources_copy;
+DROP TABLE sources_copy;
+CREATE INDEX sources_due ON sources (next_pull_at)
+  WHERE next_pull_at IS NOT NULL;
+```
+
+The new table lists its columns in the order the old table has them after
+`ALTER TABLE`, so `SELECT *` lines up. Run with `wrangler d1 migrations apply`
+against local D1 on a database holding plays and tokens, it kept every row and
+`PRAGMA foreign_key_check` printed nothing.
+
 ## 4. Song matching
 
 The same song arrives as `Weird Fishes/ Arpeggi` from Last.fm,
@@ -1026,8 +1328,50 @@ Each milestone ships on its own and ends with a check a person can run.
    registers an app. _Done when_ a user connects Spotify and a play of a track
    that ListenBrainz also holds counts once.
 8. **Imports** (optional). Spotify's extended streaming history and a YouTube
-   Google Takeout watch history, uploaded as files. Both carry timestamps and no
-   credential, and both reach back beyond what an API holds.
+   Google Takeout watch history, read in the browser and posted in batches
+   ([File imports](#file-imports)). Both carry timestamps and no credential, and
+   both reach back beyond what an API holds. The milestone adds migration
+   `0005_imports.sql`, `POST /settings/import`, `POST /settings/import/remove`,
+   the import panel on the settings page, `web/public/import-parse.js` and
+   `web/public/import.js`, a `ref` per play in `storeListens`, and the two kinds
+   in the rank list and day test of `markDuplicates`. It measures, on the
+   deployed Worker and real D1, the CPU of a 100-play batch on new tracks (the
+   batch size drops if it is over 8 ms), the rows written per play for known and
+   new tracks, and the rows written per play of a removal chunk. _Done when_
+   these hold, each in an automated test unless it says live:
+   1. A Spotify file of eight records is posted: a track played 29,999 ms; the
+      same track at 30,000 ms (kept); a 200,000 ms play with `incognito_mode`
+      true; a podcast episode with a null track URI; a track with a null track
+      name; a `spotify:local:` URI; a second track at 240,000 ms (kept); and the
+      first track again at 180,000 ms at a later time (kept). Three plays are
+      stored on the user's `spotify_import` source, each at `ts` minus
+      `ms_played / 1000`, and the total reads 3. Posting the file again returns
+      `inserted` 0 for every batch and the total stays 3.
+   2. A Takeout file of six records is posted: a `YouTube Music` record with a
+      music.youtube.com URL (kept); the same video ten minutes later (kept); a
+      record with header `YouTube`; a `YouTube Music` record with no `titleUrl`;
+      one with a `titleUrl` and no `subtitles`; and one whose title lacks
+      `Watched `. Two plays are stored on `ytmusic_import` with `ref` equal to
+      the video id, and the total reads 2. Posting it again stores none.
+   3. A ListenBrainz play of a track at time T and a `spotify_import` play of
+      the same track that starts at T + 20 s count once: the ListenBrainz row
+      has `dup = 1`. A `ytmusic` push play of a video on a UTC day and a
+      `ytmusic_import` play of the same video at 18:00 UTC on that day count
+      once, and the push row has `dup = 1`. A ListenBrainz play and a
+      `ytmusic_import` play of the same track 3 hours apart both count.
+   4. With the tally `backfill-rows` at 50,000, a batch gets `429` with
+      `Retry-After` equal to the seconds to 00:00 UTC and stores nothing. At
+      49,999 the batch is stored and the tally grows by the rows it wrote.
+   5. A source of 2,001 plays is removed in two requests: the first answers
+      `removed` 2000 and `remaining` 1, the second `remaining` 0 and deletes the
+      source. The three totals tables then equal a recount from the remaining
+      plays. After removing the import of case 3, the ListenBrainz play counts
+      again.
+   6. A batch of 101 plays gets `422` and nothing is stored.
+   7. Live: on an account with no other source, the operator imports one real
+      extended history of at least 1,000 plays on the deployed Worker. The
+      all-time total on `/u/NAME` equals the count of kept plays that the page
+      showed. Selecting the same files again stores none.
 
 ## 8. The Gist Action
 
