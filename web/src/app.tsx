@@ -268,32 +268,38 @@ app.get("/u/:path", async (context) => {
     return format === "json"
       ? context.json({ error: "not found" }, 404)
       : context.text("Not found", 404);
+  const lastFm = user.has_lastfm === 1;
   const snapshot = await getSnapshot(
     context.env,
     user,
     period,
     Math.floor(Date.now() / 1000),
   );
-  if (format === "html")
+  if (format === "html") {
+    if (lastFm) context.header("Cache-Control", "public, max-age=60");
     return context.html(
-      profilePage(
-        snapshot,
-        new URL(context.req.url).origin,
-        user.has_lastfm === 1,
-      ),
+      profilePage(snapshot, new URL(context.req.url).origin, lastFm),
     );
+  }
   context.header(
     "Content-Security-Policy",
     "default-src 'none'; style-src 'unsafe-inline'",
   );
   context.header("X-Content-Type-Options", "nosniff");
-  context.header("Cache-Control", "public, max-age=900");
+  context.header("Cache-Control", `public, max-age=${lastFm ? 60 : 900}`);
   if (card) {
     context.header("Content-Type", "image/svg+xml");
-    return context.body(renderCard(snapshot, card.size, card.theme));
+    return context.body(renderCard(snapshot, card.size, card.theme, lastFm));
   }
   context.header("Access-Control-Allow-Origin", "*");
-  return context.json(snapshot);
+  return context.json(
+    lastFm
+      ? {
+          ...snapshot,
+          credit: { name: "Last.fm", url: "https://www.last.fm" },
+        }
+      : snapshot,
+  );
 });
 
 app.notFound((context) => context.text("Not found", 404));

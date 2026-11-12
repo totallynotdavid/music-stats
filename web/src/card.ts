@@ -223,6 +223,7 @@ export function renderCard(
   snapshot: PeriodStats,
   size: number,
   theme: CardTheme,
+  lastFmCredit = false,
 ): string {
   const colours = themes[theme];
   const tracks = snapshot.top_tracks.slice(0, size);
@@ -317,6 +318,20 @@ export function renderCard(
       >
         Updated ${updated} UTC
       </text>
+      ${
+        lastFmCredit
+          ? html`<a href="https://www.last.fm"
+              ><text
+                x="${CARD_WIDTH - PAD}"
+                y="${height - 12}"
+                font-size="12"
+                fill="${colours.muted}"
+                text-anchor="end"
+                >powered by AudioScrobbler</text
+              ></a
+            >`
+          : ""
+      }
     </svg>`,
   );
 }
