@@ -7,6 +7,9 @@ pub enum Error {
     },
     NoProviders,
     AllProvidersFailed,
+    SomeProvidersFailed {
+        providers: Vec<&'static str>,
+    },
     InvalidConfig {
         field: String,
         reason: String,
@@ -47,6 +50,13 @@ impl fmt::Display for Error {
                 write!(
                     f,
                     "All configured music providers failed to fetch scrobbles"
+                )
+            }
+            Error::SomeProvidersFailed { providers } => {
+                write!(
+                    f,
+                    "The Gist was updated without {}, which failed to fetch scrobbles",
+                    providers.join(" and ")
                 )
             }
             Error::InvalidConfig { field, reason } => {

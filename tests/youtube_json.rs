@@ -57,8 +57,40 @@ fn headings_resolve_to_noon_utc_of_their_day() {
             "2024-03-19T12:00:00+00:00",
         ),
         (
-            ["Last week", "Última semana", "Semana passada"].as_slice(),
+            [
+                "This week",
+                "Esta semana",
+                "Questa settimana",
+                "Cette semaine",
+            ]
+            .as_slice(),
+            "2024-03-17T12:00:00+00:00",
+        ),
+        (
+            [
+                "Last week",
+                "Última semana",
+                "Semana passada",
+                "Settimana scorsa",
+                "Semaine dernière",
+            ]
+            .as_slice(),
             "2024-03-16T12:00:00+00:00",
+        ),
+        (
+            [
+                "February 2024",
+                "febrero de 2024",
+                "fevereiro de 2024",
+                "febbraio 2024",
+                "février 2024",
+            ]
+            .as_slice(),
+            "2024-02-15T12:00:00+00:00",
+        ),
+        (
+            ["September 2023", "setiembre de 2023"].as_slice(),
+            "2023-09-15T12:00:00+00:00",
         ),
         (["2024-01-15"].as_slice(), "2024-01-15T12:00:00+00:00"),
     ];
@@ -71,17 +103,32 @@ fn headings_resolve_to_noon_utc_of_their_day() {
 }
 
 #[test]
+fn current_month_heading_is_older_than_last_week() {
+    assert_eq!(play_dates("March 2024"), ["2024-03-06T12:00:00+00:00"]);
+}
+
+#[test]
+fn month_heading_stays_inside_its_month() {
+    let early = NaiveDate::from_ymd_opt(2024, 3, 5).unwrap();
+    let json = history_json(&[("March 2024", &[("Song", "Artist")])]).to_string();
+
+    let plays = parse_scrobbles_on(&json, early).unwrap();
+
+    assert_eq!(plays[0].played_at.to_rfc3339(), "2024-03-01T12:00:00+00:00");
+}
+
+#[test]
 #[traced_test]
 fn warns_about_a_dropped_heading() {
-    assert!(play_dates("March 2024").is_empty());
+    assert!(play_dates("Earlier").is_empty());
     assert!(logs_contain("unrecognized heading"));
-    assert!(logs_contain("March 2024"));
+    assert!(logs_contain("Earlier"));
 }
 
 #[test]
 #[traced_test]
 fn empty_unrecognized_heading_is_silent() {
-    let json = history_json(&[("March 2024", &[])]).to_string();
+    let json = history_json(&[("Earlier", &[])]).to_string();
 
     assert!(parse_scrobbles_on(&json, today()).unwrap().is_empty());
     assert!(!logs_contain("unrecognized heading"));

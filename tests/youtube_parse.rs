@@ -2,12 +2,13 @@ mod common;
 
 use common::{history_json, history_page};
 use music_stats::providers::youtube_json::parse_scrobbles;
-use music_stats::providers::youtube_parse::extract_json_from_html;
+use music_stats::providers::youtube_parse::{ensure_signed_in, extract_json_from_html};
 
 #[test]
 fn reads_every_play_of_the_recorded_page() {
     let html = std::fs::read_to_string("tests/fixtures/history.html").expect("fixture missing");
 
+    ensure_signed_in(&html).expect("the recorded page is signed in");
     let json = extract_json_from_html(&html).expect("extract");
     let plays = parse_scrobbles(&json).expect("parse");
 

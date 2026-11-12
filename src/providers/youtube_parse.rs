@@ -3,6 +3,25 @@ use crate::errors::Error;
 const MARKER: &str = "});ytcfg.set({'YTMUSIC_INITIAL_DATA': initialData});";
 const DATA_PREFIX: &str = ", data: '";
 const DATA_SUFFIX: &str = "'}";
+const SIGNED_IN: &str = "\"LOGGED_IN\":true";
+const SIGNED_OUT: &str = "\"LOGGED_IN\":false";
+
+/// A signed-out page still returns HTTP 200 with an empty history, so the
+/// page's own sign-in flag is the only reliable sign of a dead cookie.
+pub fn ensure_signed_in(html: &str) -> Result<(), Error> {
+    if html.contains(SIGNED_IN) {
+        return Ok(());
+    }
+    let detail = if html.contains(SIGNED_OUT) {
+        "YouTube Music answered as signed out; copy a fresh YOUTUBE_COOKIE"
+    } else {
+        "the history page has no LOGGED_IN flag; YouTube Music may have changed its page"
+    };
+    Err(Error::YouTube {
+        stage: "authentication".to_string(),
+        detail: detail.to_string(),
+    })
+}
 
 pub fn extract_json_from_html(html: &str) -> Result<String, Error> {
     let marker_pos = html.find(MARKER).ok_or_else(|| Error::YouTube {

@@ -48,7 +48,7 @@ async fn returns_lastfm_scrobbles_when_youtube_fails() {
     let client = reqwest::Client::new();
     let config = config_with_both();
 
-    let scrobbles = fetch_scrobbles(
+    let fetched = fetch_scrobbles(
         &client,
         &config,
         &lastfm_server.uri(),
@@ -57,8 +57,18 @@ async fn returns_lastfm_scrobbles_when_youtube_fails() {
     .await
     .expect("should succeed with the Last.fm data that was fetched");
 
-    assert_eq!(scrobbles.len(), 1);
-    assert_eq!(scrobbles[0].track.title, "Song");
+    assert_eq!(fetched.scrobbles.len(), 1);
+    assert_eq!(fetched.scrobbles[0].track.title, "Song");
+    assert_eq!(fetched.failed, ["YouTube"]);
+}
+
+#[test]
+fn a_partial_failure_names_the_missing_providers() {
+    let error = Error::SomeProvidersFailed {
+        providers: vec!["YouTube"],
+    };
+
+    assert!(error.to_string().contains("without YouTube"), "{error}");
 }
 
 #[tokio::test]
