@@ -21,7 +21,21 @@ const ResponseSchema = v.object({
 });
 
 export type Listen = v.InferOutput<typeof ListenSchema>;
-export type ListenFetcher = (url: string) => Promise<unknown>;
+
+export interface FetchResult {
+  status: number;
+  body?: unknown;
+  remaining?: number;
+  resetIn?: number;
+}
+
+export type ListenFetcher = (url: string) => Promise<FetchResult>;
+
+class RateLimited extends Error {
+  constructor(readonly resetIn: number) {
+    super("ListenBrainz returned 429");
+  }
+}
 
 const idlePullDelay = (idlePulls: number) =>
   Math.min(6 * 60 * 60, 15 * 60 * 2 ** idlePulls);
@@ -29,6 +43,11 @@ const idlePullDelay = (idlePulls: number) =>
 function nextPullDelay(inserted: number, idlePulls: number) {
   return inserted > 0 ? 15 * 60 : idlePullDelay(idlePulls);
 }
+
+const nextUtcMidnight = (now: number) =>
+  Math.floor(now / 86400) * 86400 + 86400;
+
+const dailyLimitPattern = /daily row (?:read|write) limit/i;
 
 function listenKey(listen: Listen) {
   const info = listen.track_metadata.additional_info;
@@ -45,14 +64,25 @@ async function fetchPage(
   fetcher: ListenFetcher,
 ) {
   const url = `${baseUrl.replace(/\/$/u, "")}/1/user/${encodeURIComponent(username)}/listens?${params}`;
-  const parsed = v.safeParse(ResponseSchema, await fetcher(url));
+  const result = await fetcher(url);
+  if (result.status === 429) throw new RateLimited(result.resetIn ?? 60);
+  if (result.status !== 200)
+    throw new Error(`ListenBrainz returned ${result.status}`);
+  const parsed = v.safeParse(ResponseSchema, result.body);
   if (!parsed.success)
     throw new Error("ListenBrainz returned an invalid response");
-  return parsed.output.payload.listens;
+  return {
+    listens: parsed.output.payload.listens,
+    remaining: result.remaining,
+    resetIn: result.resetIn,
+  };
 }
 
-const maxListensPerPull = 1000;
-const maxSourcesPerPull = 5;
+export const maxListensPerPull = 200;
+export const maxSourcesPerPull = 1;
+const d1CapKey = "d1-capped";
+
+const nextTickDelay = 60;
 
 async function storeListensPage(
   db: D1Database,
@@ -84,63 +114,146 @@ export async function pullListenBrainz(
   source: SourceRow,
   fetcher: ListenFetcher = async (url) => {
     const response = await fetch(url);
-    if (!response.ok)
-      throw new Error(`ListenBrainz returned ${response.status}`);
-    return response.json();
+    const header = (name: string) => {
+      const raw = response.headers.get(name);
+      if (raw === null) return undefined;
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : undefined;
+    };
+    return {
+      status: response.status,
+      body: response.ok ? await response.json() : undefined,
+      remaining: header("x-ratelimit-remaining"),
+      resetIn: header("x-ratelimit-reset-in"),
+    };
   },
   now = Math.floor(Date.now() / 1000),
 ) {
   if (!source.account) throw new Error("ListenBrainz source has no account");
   const baseUrl = env.LISTENBRAINZ_BASE_URL ?? "https://api.listenbrainz.org";
-  const newParams = new URLSearchParams({ count: "1000" });
-  if (source.cursor !== null) newParams.set("min_ts", String(source.cursor));
-  const current = await fetchPage(baseUrl, source.account, newParams, fetcher);
-  const currentPage = current.slice(0, maxListensPerPull);
-  const currentInserted = await storeListensPage(env.DB, source, currentPage);
-  let inserted = currentInserted;
+  let waitUntil = 0;
+  const noteRateLimit = (remaining?: number, resetIn?: number) => {
+    if (remaining === 0 && resetIn !== undefined) waitUntil = resetIn;
+  };
+
+  let currentPage: Listen[] = [];
+  try {
+    const newParams = new URLSearchParams({
+      count: String(maxListensPerPull),
+    });
+    if (source.cursor !== null) newParams.set("min_ts", String(source.cursor));
+    const current = await fetchPage(
+      baseUrl,
+      source.account,
+      newParams,
+      fetcher,
+    );
+    noteRateLimit(current.remaining, current.resetIn);
+    currentPage = current.listens.slice(0, maxListensPerPull);
+  } catch (error) {
+    if (!(error instanceof RateLimited)) throw error;
+    waitUntil = error.resetIn;
+  }
+
+  let inserted = await storeListensPage(env.DB, source, currentPage);
 
   let cursor = source.cursor;
   let backfillBefore = source.backfill_before;
+  let gapBefore = source.gap_before;
+  let gapFloor = source.gap_floor;
   if (currentPage.length > 0) {
     cursor = Math.max(
       cursor ?? 0,
       ...currentPage.map((listen) => listen.listened_at),
     );
+    const pageMin = Math.min(
+      ...currentPage.map((listen) => listen.listened_at),
+    );
     if (source.cursor === null) {
-      backfillBefore = Math.min(
-        ...currentPage.map((listen) => listen.listened_at),
-      );
+      backfillBefore = pageMin;
+    } else if (currentPage.length === maxListensPerPull) {
+      gapFloor = Math.min(gapFloor ?? source.cursor, source.cursor);
+      gapBefore = Math.max(gapBefore ?? pageMin, pageMin);
     }
   }
 
-  const remaining = maxListensPerPull - currentPage.length;
-  if (remaining > 0 && backfillBefore !== null && backfillBefore >= 0) {
-    const backfillParams = new URLSearchParams({
-      count: "1000",
-      max_ts: String(backfillBefore),
-    });
-    const historical = await fetchPage(
-      baseUrl,
-      source.account,
-      backfillParams,
-      fetcher,
-    );
-    const historicalPage = historical.slice(0, remaining);
-    if (historicalPage.length === 0) {
+  const gapActive =
+    gapBefore !== null && gapFloor !== null && gapBefore > gapFloor;
+  const budget = maxListensPerPull - currentPage.length;
+  const walkBound = gapActive
+    ? gapBefore
+    : backfillBefore !== null && backfillBefore >= 0
+      ? backfillBefore
+      : null;
+  let walkPage: Listen[] | null = null;
+  if (waitUntil === 0 && budget > 0 && walkBound !== null) {
+    try {
+      const walk = await fetchPage(
+        baseUrl,
+        source.account,
+        new URLSearchParams({
+          count: String(budget),
+          max_ts: String(walkBound),
+        }),
+        fetcher,
+      );
+      noteRateLimit(walk.remaining, walk.resetIn);
+      walkPage = walk.listens.slice(0, budget);
+    } catch (error) {
+      if (!(error instanceof RateLimited)) throw error;
+      waitUntil = error.resetIn;
+    }
+  }
+
+  if (walkPage !== null) {
+    if (walkPage.length > 0) {
+      inserted += await storeListensPage(env.DB, source, walkPage);
+    }
+    const pageMin =
+      walkPage.length === 0
+        ? null
+        : Math.min(...walkPage.map((listen) => listen.listened_at));
+    if (gapActive) {
+      if (
+        pageMin === null ||
+        pageMin <= (gapFloor ?? 0) ||
+        walkPage.length < budget
+      ) {
+        gapBefore = null;
+        gapFloor = null;
+      } else {
+        gapBefore = pageMin;
+      }
+    } else if (walkPage.length < budget) {
       backfillBefore = null;
     } else {
-      const changes = await storeListensPage(env.DB, source, historicalPage);
-      inserted += changes;
-      backfillBefore = Math.min(
-        ...historicalPage.map((listen) => listen.listened_at),
-      );
+      backfillBefore = pageMin;
     }
   }
 
-  const idlePulls = inserted > 0 ? 0 : source.idle_pulls + 1;
-  const delay = nextPullDelay(inserted, idlePulls);
+  if (gapBefore !== null && gapFloor !== null && gapBefore <= gapFloor) {
+    gapBefore = null;
+    gapFloor = null;
+  }
+  const frontierLeft = gapBefore !== null || backfillBefore !== null;
+  const moreToPull =
+    currentPage.length === maxListensPerPull ||
+    (walkPage !== null && walkPage.length === budget && frontierLeft);
+  const idlePulls =
+    inserted > 0
+      ? 0
+      : waitUntil > 0 || moreToPull
+        ? source.idle_pulls
+        : source.idle_pulls + 1;
+  const delay =
+    waitUntil > 0
+      ? waitUntil
+      : moreToPull
+        ? nextTickDelay
+        : nextPullDelay(inserted, idlePulls);
   await env.DB.prepare(
-    `UPDATE sources SET cursor = ?1, backfill_before = ?2, idle_pulls = ?3,
+    `UPDATE sources SET cursor = ?1, backfill_before = ?2, gap_before = ?8,
+       gap_floor = ?9, idle_pulls = ?3,
        next_pull_at = ?4, status = 'active', error = NULL, last_ok_at = ?5,
        play_count = play_count + ?6 WHERE id = ?7`,
   )
@@ -152,6 +265,8 @@ export async function pullListenBrainz(
       now,
       inserted,
       source.id,
+      gapBefore,
+      gapFloor,
     )
     .run();
   return { inserted, cursor, backfillBefore };
@@ -161,13 +276,27 @@ export async function pullDueSources(
   env: Env,
   now = Math.floor(Date.now() / 1000),
 ) {
-  const result = await env.DB.prepare(
-    `SELECT id, user_id, kind, account, cursor, backfill_before, next_pull_at, idle_pulls
+  if (await env.CACHE?.get(d1CapKey)) return;
+  let result;
+  try {
+    result = await env.DB.prepare(
+      `SELECT id, user_id, kind, account, cursor, backfill_before, gap_before,
+       gap_floor, next_pull_at, idle_pulls
        FROM sources WHERE next_pull_at IS NOT NULL AND next_pull_at <= ?1
        ORDER BY next_pull_at, id LIMIT ${maxSourcesPerPull}`,
-  )
-    .bind(now)
-    .all<SourceRow>();
+    )
+      .bind(now)
+      .all<SourceRow>();
+  } catch (error) {
+    if (error instanceof Error && dailyLimitPattern.test(error.message)) {
+      if (env.CACHE)
+        await env.CACHE.put(d1CapKey, "1", {
+          expiration: nextUtcMidnight(now),
+        });
+      return;
+    }
+    throw error;
+  }
   for (const source of result.results) {
     if (source.kind !== "listenbrainz") continue;
     try {
@@ -177,12 +306,17 @@ export async function pullDueSources(
         error instanceof Error
           ? error.message.slice(0, 200)
           : "ListenBrainz pull failed";
-      const idlePulls = source.idle_pulls + 1;
-      const delay = nextPullDelay(0, idlePulls);
+      if (dailyLimitPattern.test(message)) {
+        if (env.CACHE)
+          await env.CACHE.put(d1CapKey, "1", {
+            expiration: nextUtcMidnight(now),
+          });
+        return;
+      }
       await env.DB.prepare(
         "UPDATE sources SET status = 'error', error = ?1, idle_pulls = idle_pulls + 1, next_pull_at = ?2 WHERE id = ?3",
       )
-        .bind(message, now + delay, source.id)
+        .bind(message, now + nextPullDelay(0, source.idle_pulls + 1), source.id)
         .run();
     }
   }

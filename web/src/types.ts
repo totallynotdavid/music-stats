@@ -13,6 +13,8 @@ export interface SourceRow {
   account: string | null;
   cursor: number | null;
   backfill_before: number | null;
+  gap_before: number | null;
+  gap_floor: number | null;
   next_pull_at: number | null;
   idle_pulls: number;
 }

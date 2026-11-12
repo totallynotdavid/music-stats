@@ -1,0 +1,2 @@
+ALTER TABLE sources ADD COLUMN gap_before INTEGER;
+ALTER TABLE sources ADD COLUMN gap_floor INTEGER;

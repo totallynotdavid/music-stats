@@ -7,7 +7,7 @@ interface BulkListen extends TrackInput {
   sourceId: number;
 }
 
-interface PreparedListen extends BulkListen {
+interface PreparedFields {
   artistKey: string;
   titleKey: string;
   normalizedKey: string;
@@ -52,7 +52,7 @@ export interface PageResolution {
 
 const readAliasSql = `
   WITH page AS (
-    SELECT DISTINCT json_extract(value, '$.sourceKey') AS source_key
+    SELECT DISTINCT value AS source_key
     FROM json_each(?1)
   )
   SELECT aliases.source_key,
@@ -169,25 +169,22 @@ const bulkPlaySql = `
   RETURNING 1 AS inserted
 `;
 
-function prepareInputs(inputs: BulkListen[]): PreparedListen[] {
-  return inputs.map((input) => {
-    const artistKey = normalizeText(input.artist, input.kind === "ytmusic");
-    const titleKey = normalizeText(input.title);
-    return {
-      ...input,
-      artistKey,
-      titleKey,
-      normalizedKey: artistKey + "\u001f" + titleKey,
-    };
-  });
+function prepareFields(input: BulkListen): PreparedFields {
+  const artistKey = normalizeText(input.artist, input.kind === "ytmusic");
+  const titleKey = normalizeText(input.title);
+  return {
+    artistKey,
+    titleKey,
+    normalizedKey: artistKey + "\u001f" + titleKey,
+  };
 }
 
 function sameIdentifier(
-  input: PreparedListen,
+  fields: PreparedFields,
   track: Pick<WalkTrack, "artistKey" | "titleKey">,
 ) {
   return (
-    input.artistKey === track.artistKey || input.titleKey === track.titleKey
+    fields.artistKey === track.artistKey || fields.titleKey === track.titleKey
   );
 }
 
@@ -195,8 +192,9 @@ function asWalkTrack(track: ExistingTrack): WalkTrack {
   return { ...track, artist: "", title: "" };
 }
 
-function resolvePreparedPage(
-  inputs: PreparedListen[],
+function resolvePage(
+  inputs: readonly BulkListen[],
+  prepared: ReadonlyMap<BulkListen, PreparedFields>,
   aliases: ReadonlyMap<string, ExistingTrack>,
   existingTracks: readonly ExistingTrack[],
 ): PageResolution {
@@ -240,40 +238,40 @@ function resolvePreparedPage(
     if (aliasedTrack) track = asWalkTrack(aliasedTrack);
     if (!track) track = pageAliases.get(input.sourceKey);
     if (!track) {
+      const fields = prepared.get(input)!;
       const mbidCandidates = input.mbid ? byMbid.get(input.mbid) : undefined;
       track = mbidCandidates?.find((candidate) =>
-        sameIdentifier(input, candidate),
+        sameIdentifier(fields, candidate),
       );
       if (!track) {
         const isrcCandidates = input.isrc ? byIsrc.get(input.isrc) : undefined;
         track = isrcCandidates?.find((candidate) =>
-          sameIdentifier(input, candidate),
+          sameIdentifier(fields, candidate),
         );
       }
-      if (!track) track = byKey.get(input.normalizedKey);
-    }
-
-    if (!track) {
-      const newTrack: WalkTrack = {
-        id: null,
-        key: input.normalizedKey,
-        mbid: input.mbid ?? null,
-        isrc: input.isrc ?? null,
-        artistKey: input.artistKey,
-        titleKey: input.titleKey,
-        artist: input.artist,
-        title: input.title,
-      };
-      track = newTrack;
-      addTrack(track);
-      newTracks.set(track.key, {
-        key: track.key,
-        artistKey: track.artistKey,
-        artist: track.artist,
-        title: track.title,
-        mbid: track.mbid,
-        isrc: track.isrc,
-      });
+      if (!track) track = byKey.get(fields.normalizedKey);
+      if (!track) {
+        const newTrack: WalkTrack = {
+          id: null,
+          key: fields.normalizedKey,
+          mbid: input.mbid ?? null,
+          isrc: input.isrc ?? null,
+          artistKey: fields.artistKey,
+          titleKey: fields.titleKey,
+          artist: input.artist,
+          title: input.title,
+        };
+        track = newTrack;
+        addTrack(track);
+        newTracks.set(track.key, {
+          key: track.key,
+          artistKey: track.artistKey,
+          artist: track.artist,
+          title: track.title,
+          mbid: track.mbid,
+          isrc: track.isrc,
+        });
+      }
     }
 
     addIdentifier(byMbid, input.mbid ?? null, track);
@@ -296,29 +294,27 @@ export function resolvePageTracks(
   aliases: ReadonlyMap<string, ExistingTrack>,
   existingTracks: readonly ExistingTrack[],
 ) {
-  return resolvePreparedPage(prepareInputs(inputs), aliases, existingTracks);
+  const prepared = new Map(
+    inputs.map((input) => [input, prepareFields(input)]),
+  );
+  return resolvePage(inputs, prepared, aliases, existingTracks);
 }
 
-async function loadExistingTracks(
-  db: D1Database,
-  payload: string,
-  kind: string,
-) {
-  const results = await db.batch([
-    db.prepare(readAliasSql).bind(payload, kind),
-    db.prepare(readTrackSql).bind(payload),
-  ]);
-  const aliasRows = (results[0]?.results ?? []) as Array<
-    ExistingTrack & { source_key: string }
-  >;
-  const trackRows = (results[1]?.results ?? []) as ExistingTrack[];
+async function readAliases(db: D1Database, inputs: BulkListen[], kind: string) {
+  const payload = JSON.stringify(inputs.map((input) => input.sourceKey));
+  const rows = (
+    await db
+      .prepare(readAliasSql)
+      .bind(payload, kind)
+      .all<ExistingTrack & { source_key: string }>()
+  ).results;
   const aliases = new Map<string, ExistingTrack>();
   const tracks = new Map<number, ExistingTrack>();
-  for (const row of [...aliasRows, ...trackRows]) {
+  for (const row of rows) {
+    aliases.set(row.source_key, row);
     tracks.set(row.id, row);
   }
-  for (const row of aliasRows) aliases.set(row.source_key, row);
-  return { aliases, tracks: [...tracks.values()] };
+  return { aliases, tracks };
 }
 
 export async function storeListens(
@@ -327,14 +323,35 @@ export async function storeListens(
   kind: string,
 ) {
   if (inputs.length === 0) return 0;
-  const prepared = prepareInputs(inputs);
-  const payload = JSON.stringify(prepared);
-  const existing = await loadExistingTracks(db, payload, kind);
-  const resolution = resolvePreparedPage(
-    prepared,
-    existing.aliases,
-    existing.tracks,
-  );
+  const existing = await readAliases(db, inputs, kind);
+  const prepared = new Map<BulkListen, PreparedFields>();
+  const candidates: Array<{
+    normalizedKey: string;
+    mbid: string | null;
+    isrc: string | null;
+  }> = [];
+  for (const input of inputs) {
+    if (existing.aliases.has(input.sourceKey)) continue;
+    const fields = prepareFields(input);
+    prepared.set(input, fields);
+    candidates.push({
+      normalizedKey: fields.normalizedKey,
+      mbid: input.mbid ?? null,
+      isrc: input.isrc ?? null,
+    });
+  }
+  if (candidates.length > 0) {
+    const rows = (
+      await db
+        .prepare(readTrackSql)
+        .bind(JSON.stringify(candidates))
+        .all<ExistingTrack>()
+    ).results;
+    for (const row of rows) existing.tracks.set(row.id, row);
+  }
+  const resolution = resolvePage(inputs, prepared, existing.aliases, [
+    ...existing.tracks.values(),
+  ]);
   const newTracksPayload = JSON.stringify(resolution.newTracks);
   const listensPayload = JSON.stringify(resolution.listens);
   const results = await db.batch([
