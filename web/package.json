@@ -7,7 +7,7 @@
     "deploy": "wrangler deploy",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "lint": "oxlint src test",
+    "lint": "oxlint src test bench",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
