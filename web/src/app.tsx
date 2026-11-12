@@ -3,7 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import type { Env, Period, PeriodStats } from "./types";
 import { getStats } from "./aggregate";
 import { renderCard, type CardTheme } from "./card";
-import { pullDueSources } from "./listenbrainz";
+import { pullDueSources } from "./cron";
 import { uploadPlays } from "./upload";
 
 const periods: Period[] = ["week", "month", "all"];
@@ -30,10 +30,14 @@ function readTheme(value: string | undefined): CardTheme | null {
 async function findUser(db: D1Database, name: string) {
   return db
     .prepare(
-      "SELECT id, name FROM users WHERE name = ?1 COLLATE NOCASE AND is_public = 1",
+      `SELECT id, name,
+       EXISTS (
+         SELECT 1 FROM sources WHERE user_id = users.id AND kind = 'lastfm'
+       ) AS has_lastfm
+       FROM users WHERE name = ?1 COLLATE NOCASE AND is_public = 1`,
     )
     .bind(name)
-    .first<{ id: number; name: string }>();
+    .first<{ id: number; name: string; has_lastfm: number }>();
 }
 
 async function getSnapshot(
@@ -84,7 +88,11 @@ function list(items: Array<{ title: string; artist: string; plays: number }>) {
   );
 }
 
-function profilePage(snapshot: PeriodStats, origin: string) {
+function profilePage(
+  snapshot: PeriodStats,
+  origin: string,
+  lastFmCredit: boolean,
+) {
   const maxDaily = Math.max(1, ...snapshot.daily.map((day) => day.plays));
   const cardUrl = `${origin}/u/${encodeURIComponent(snapshot.user.name)}.svg`;
   return (
@@ -185,6 +193,12 @@ function profilePage(snapshot: PeriodStats, origin: string) {
             >
               JSON
             </a>
+            {lastFmCredit && (
+              <>
+                {" "}
+                · <a href="https://www.last.fm">powered by AudioScrobbler</a>
+              </>
+            )}
           </footer>
         </main>
       </body>
@@ -236,7 +250,7 @@ app.get("/u/:path", async (context) => {
       ? context.json({ error: "not found" }, 404)
       : context.text("Not found", 404);
   const user = await findUser(context.env.DB, name);
-  if (!user)
+  if (!user || (user.has_lastfm === 1 && !context.env.LASTFM_APPROVAL))
     return format === "json"
       ? context.json({ error: "not found" }, 404)
       : context.text("Not found", 404);
@@ -247,7 +261,13 @@ app.get("/u/:path", async (context) => {
     Math.floor(Date.now() / 1000),
   );
   if (format === "html")
-    return context.html(profilePage(snapshot, new URL(context.req.url).origin));
+    return context.html(
+      profilePage(
+        snapshot,
+        new URL(context.req.url).origin,
+        user.has_lastfm === 1,
+      ),
+    );
   context.header(
     "Content-Security-Policy",
     "default-src 'none'; style-src 'unsafe-inline'",

@@ -23,5 +23,6 @@
   ],
   "vars": {
     "LISTENBRAINZ_BASE_URL": "https://api.listenbrainz.org",
+    "LASTFM_APPROVAL": "",
   },
 }

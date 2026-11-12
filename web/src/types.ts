@@ -4,6 +4,9 @@ export interface Env {
   DB: D1Database;
   CACHE?: KVNamespace;
   LISTENBRAINZ_BASE_URL?: string;
+  LASTFM_BASE_URL?: string;
+  LASTFM_API_KEY?: string;
+  LASTFM_APPROVAL?: string;
 }
 
 export interface SourceRow {
@@ -17,6 +20,7 @@ export interface SourceRow {
   gap_floor: number | null;
   next_pull_at: number | null;
   idle_pulls: number;
+  play_count?: number;
 }
 
 export interface TrackInput {
