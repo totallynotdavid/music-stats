@@ -27,3 +27,19 @@ jobs:
           YOUTUBE_COOKIE: ${{ secrets.YOUTUBE_COOKIE }}
           DAYS: ${{ vars.DAYS }}
           TOP_N: ${{ vars.TOP_N }}
+
+  # GitHub disables a schedule after 60 days without repository activity;
+  # enabling the workflow again resets that clock without a commit.
+  keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+
+    steps:
+      - name: Keep the schedule enabled
+        run: |
+          gh api -X PUT \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/gist.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
