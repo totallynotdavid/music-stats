@@ -76,19 +76,23 @@ history data out of the page, and decodes its `\xNN` escapes as UTF-8, so titles
 and artists keep their non-ASCII characters.
 [`src/providers/youtube_json.rs`](../src/providers/youtube_json.rs) reads the
 data. The history groups plays under date headings, and the page gives no time
-of day, so each play takes the date of its heading, at 12:00 UTC:
+of day, so each play takes the date of its heading, at 12:00 UTC. "Today" is the
+current day in the time zone `MUSIC_STATS_TZ` names (UTC by default):
 
-| Heading                                                   | Date used                     |
-| --------------------------------------------------------- | ----------------------------- |
-| Today (English, Spanish, Portuguese, Italian, French)     | Today, in UTC.                |
-| Yesterday (same languages)                                | Yesterday, in UTC.            |
-| This week (same languages)                                | Three days before today, UTC. |
-| Last week (same languages)                                | Four days before today, UTC.  |
-| A month and year, such as `October 2026` (same languages) | The 15th of that month.       |
-| A `YYYY-MM-DD` date                                       | That date.                    |
-| Anything else                                             | Dropped.                      |
+| Heading                                                   | Date used                |
+| --------------------------------------------------------- | ------------------------ |
+| Today (English, Spanish, Portuguese, Italian, French)     | Today.                   |
+| Yesterday (same languages)                                | Yesterday.               |
+| This week (same languages)                                | Three days before today. |
+| Last week (same languages)                                | Four days before today.  |
+| A month and year, such as `October 2026` (same languages) | The 15th of that month.  |
+| A `YYYY-MM-DD` date                                       | That date.               |
+| Anything else                                             | Dropped.                 |
 
-The week and month headings span several days, so their plays share one date. A
+The provider returns every play of the page, newest first, with its video ID
+and, for the plays under Today, Yesterday and a `YYYY-MM-DD` heading, the day.
+The [upload](configuration.md#the-upload) sends those plays. The week and month
+headings span several days, so their plays share one date and have no day. A
 month heading holds plays older than Last week, so for the current month the
 date moves back to 14 days before today, but never before the 1st. For a dropped
 heading, a `warn` log names the heading and how many plays it held.
@@ -96,8 +100,9 @@ heading, a `warn` log names the heading and how many plays it held.
 The headings follow the language of your Google account, not of the page
 request.
 
-A play counts if its timestamp is no more than `DAYS` times 24 hours old.
-Because the timestamp is noon UTC, a play from yesterday is dropped with
-`DAYS=1` once it is past noon UTC today. A play with no artist link is listed as
+The Gist counts a play if its timestamp is no more than `DAYS` times 24 hours
+old. The upload ignores `DAYS`. Because the timestamp is noon UTC of the
+heading's day, the Gist drops a play from yesterday with `DAYS=1` once 24 hours
+have passed since that noon. A play with no artist link is listed as
 `Unknown Artist`. A play with several artist links is listed under the first
 one. A play with no title link is skipped.

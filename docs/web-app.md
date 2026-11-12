@@ -310,7 +310,9 @@ Content-Type: application/json
   `Content-Type` must be `application/json`. The Worker refuses
   `Content-Encoding`, because decompression costs CPU time that the Free plan
   does not have. ListenBrainz sets the same count (1,000 listens per request).
-  The page holds about 200 plays, so a normal body is under 40 KiB.
+  The page holds about 200 plays, so a normal body is under 40 KiB. The crate
+  sends the newest 1,000 plays of a longer page in one request. Several requests
+  would read as several unrelated pages, and the older ones would count again.
 - **Rate.** One upload per source every 30 seconds. The Worker reads
   `sources.last_ok_at` while it authenticates, so the check costs no extra
   query. A faster request gets `429` with `Retry-After`.
@@ -446,16 +448,16 @@ comparisons for a normal page. Milestone 5 measures its CPU time at 1,000 pairs.
 ### What a day means
 
 Google builds the headings in the history page ("Today", "Yesterday") for some
-time zone, and the page does not say which. The crate resolves them in UTC
-([`youtube_json.rs`](../src/providers/youtube_json.rs)). A user whose day ends
-at another hour would see a play counted on two days across two runs: first
-under "Today", then under "Yesterday". The upload therefore takes a time zone
-from the setting `MUSIC_STATS_TZ` (an IANA name, default `UTC`), and the crate
-resolves "Today" and "Yesterday" in it. A wrong boundary also breaks the
-alignment, because the same play would carry two days on two uploads. Milestone
-5 measures the boundary: upload hourly for two days and check that no play lands
-on two days and that no upload reports a gap. Until that passes, the design
-treats a one-day error on YouTube Music plays as possible.
+time zone, and the page does not say which. A crate that always used UTC would
+show a user whose day ends at another hour a play counted on two days across two
+runs: first under "Today", then under "Yesterday". The crate therefore takes a
+time zone from the setting `MUSIC_STATS_TZ` (an IANA name, default `UTC`), and
+[`youtube_json.rs`](../src/providers/youtube_json.rs) resolves "Today" and
+"Yesterday" in it. A wrong boundary also breaks the alignment, because the same
+play would carry two days on two uploads. Milestone 5 measures the boundary:
+upload hourly for two days and check that no play lands on two days and that no
+upload reports a gap. Until that passes, the design treats a one-day error on
+YouTube Music plays as possible.
 
 The crate sends only plays that sit under "Today", "Yesterday" or a `YYYY-MM-DD`
 heading. The week and month headings cover several days, and the crate gives
@@ -912,12 +914,13 @@ The change is small and sits behind new settings:
 - `UPLOAD_URL` (default `https://music.rising.sh`) and `UPLOAD_TOKEN`. When
   `UPLOAD_TOKEN` is set, the program posts the YouTube plays to `/api/v1/upload`
   through a new `src/output/upload.rs`. `GIST_ID` and `GH_TOKEN` become
-  optional, and at least one output is required. The
+  optional, and at least one output is required. `UPLOAD_TOKEN` needs
+  `YOUTUBE_COOKIE`, the only source it uploads. The
   [Configuration](configuration.md) page changes with the code.
 - `MUSIC_STATS_TZ` sets the time zone for "Today" and "Yesterday".
 - The YouTube provider returns all the plays of the page and marks which have a
   day. `DAYS` applies to the Gist only. The upload ignores it and sends every
-  play with a day, up to the whole page.
+  play with a day and a video id, up to the whole page.
 - `youtube_json.rs` reads `videoId` from each play's `watchEndpoint`.
 - Last.fm stays a Gist-only input in the program. The service pulls Last.fm
   itself, so a hosted user does not put a Last.fm key in a workflow.

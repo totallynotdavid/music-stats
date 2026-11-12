@@ -6,7 +6,7 @@
    errors.
 3. [Providers](providers.md): get Last.fm and YouTube Music credentials, and how
    each source is read.
-4. [Output](output.md): what the Gist contains.
+4. [Output](output.md): what the Gist and the upload contain.
 5. [Architecture](architecture.md): the code map.
 6. [Releasing](releasing.md): publish a version.
 7. [Web app](web-app.md): the design of the hosted service.
