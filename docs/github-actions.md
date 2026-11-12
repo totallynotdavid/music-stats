@@ -34,6 +34,18 @@ again.
 The workflow runs daily at 00:00 UTC. Change the `cron` expression in
 [`gist.yml`](../.github/workflows/gist.yml) to run at other times.
 
+GitHub disables a scheduled workflow in a repository with no activity for 60
+days. A second job, `keepalive`, runs on each scheduled run and enables the
+workflow again through the API, which resets that count. It needs no secret and
+makes no commit.
+
+## Failed runs
+
+A run fails when a provider fails, even if the other provider updated the Gist.
+GitHub emails you about a failed scheduled run, so an expired YouTube cookie
+shows up the next day. Replace the `YOUTUBE_COOKIE` secret as
+[Providers](providers.md#keep-the-cookie-working) describes.
+
 ## Settings
 
 To change `DAYS` or `TOP_N`, add them as repository variables, not secrets, at

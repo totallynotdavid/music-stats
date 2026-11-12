@@ -28,9 +28,9 @@ main → config::load → app::run
 | `src/app.rs`                     | The pipeline. `fetch_scrobbles` calls each configured provider and decides what a partial failure means.                   |
 | `src/providers/types.rs`         | `Scrobble` (one play) and `Track` (artist and title).                                                                      |
 | `src/providers/lastfm.rs`        | Fetches and pages through `user.getrecenttracks`.                                                                          |
-| `src/providers/youtube.rs`       | Runs the YouTube steps in order, fails when the page has no plays, and drops plays older than `DAYS`.                      |
+| `src/providers/youtube.rs`       | Runs the YouTube steps in order, fails when the page is signed out, and drops plays older than `DAYS`.                     |
 | `src/providers/youtube_http.rs`  | Builds the cookie and `SAPISIDHASH` header, and requests the history page.                                                 |
-| `src/providers/youtube_parse.rs` | Extracts the embedded JSON string from the page and decodes its `\xNN` escapes to UTF-8.                                   |
+| `src/providers/youtube_parse.rs` | Reads the page's sign-in flag, extracts the embedded JSON string and decodes its `\xNN` escapes to UTF-8.                  |
 | `src/providers/youtube_json.rs`  | Turns that JSON into `Scrobble`s. `parse_scrobbles_on` takes the current day, so tests do not depend on the clock.         |
 | `src/aggregate.rs`               | Counts plays per `Track`, sorts by count, then artist, then title, and keeps the top `TOP_N`.                              |
 | `src/output/format.rs`           | Renders `Statistics` as the text of the Gist file.                                                                         |
@@ -47,8 +47,11 @@ main → config::load → app::run
 - Every function that makes a request takes the base URL as an argument. The
   `DEFAULT_BASE_URL` constants hold the real addresses. Tests pass the address
   of a `wiremock` server instead.
-- `app::fetch_scrobbles` counts a provider's failure and goes on. It returns
-  `Error::AllProvidersFailed` only when every configured provider failed.
+- `app::fetch_scrobbles` records a provider's failure and goes on. It returns
+  `Error::AllProvidersFailed` when every configured provider failed, and
+  otherwise the plays with the names of the failed providers. `app::run`
+  publishes those plays first and then returns `Error::SomeProvidersFailed`, so
+  the run exits 1.
 
 ## Tests
 

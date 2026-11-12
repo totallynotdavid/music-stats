@@ -32,22 +32,28 @@ the history that exists reads all of it.
 `music-stats` logs to standard output. At the default level it reports how many
 plays each provider returned, the total (`<N> plays, <M> unique tracks`) before
 the upload, and whether the Gist was updated. A provider that fails is logged at
-`warn`.
+`error` with the reason.
 
 ## Errors
 
 `music-stats` prints `Error: <message>` to standard error and exits with status
-1 when it cannot finish. It exits with status 0 after updating the Gist.
+1 when it cannot finish, or when it updated the Gist without a provider that
+failed. It exits with status 0 after updating the Gist with every configured
+provider.
 
-| Message starts with                     | Cause                                                         |
-| --------------------------------------- | ------------------------------------------------------------- |
-| `Missing required environment variable` | `GIST_ID` or `GH_TOKEN` is not set.                           |
-| `No music providers configured`         | No complete provider is set.                                  |
-| `Invalid DAYS` / `Invalid TOP_N`        | The value is not a whole number, or is 0.                     |
-| `All configured music providers failed` | Every configured provider failed. The `warn` log says why.    |
-| `Failed to update gist`                 | GitHub rejected the update. The message includes the reply.   |
-| `Network error accessing`               | A request did not complete, or a reply could not be read.     |
-| `YouTube history failed`                | The history page has no plays. See [Providers](providers.md). |
+| Message starts with                     | Cause                                                                                          |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `Missing required environment variable` | `GIST_ID` or `GH_TOKEN` is not set.                                                            |
+| `No music providers configured`         | No complete provider is set.                                                                   |
+| `Invalid DAYS` / `Invalid TOP_N`        | The value is not a whole number, or is 0.                                                      |
+| `All configured music providers failed` | Every configured provider failed. The `error` log says why. The Gist is unchanged.             |
+| `The Gist was updated without`          | The named provider failed and the Gist holds only the other's plays. The `error` log says why. |
+| `Failed to update gist`                 | GitHub rejected the update. The message includes the reply.                                    |
+| `Network error accessing`               | A request did not complete, or a reply could not be read.                                      |
+
+A YouTube log of `YouTube authentication failed` means the cookie no longer
+works. [Providers](providers.md#keep-the-cookie-working) says how to export one
+that lasts.
 
 Each request times out after 30 seconds. Messages about Last.fm name the base
 URL of the API, never the request URL, so they do not contain your API key.
