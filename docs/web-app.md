@@ -316,7 +316,9 @@ Content-Type: application/json
   would read as several unrelated pages, and the older ones would count again.
 - **Rate.** One upload per source every 30 seconds. The Worker reads
   `sources.last_ok_at` while it authenticates, so the check costs no extra
-  query. A faster request gets `429` with `Retry-After`.
+  query. A faster request gets `429` with `Retry-After`. A replayed page still
+  updates `sources.last_ok_at` and `tokens.last_used_at`, so the limit applies
+  to a re-run too. In the reply, `duplicate` is `received` minus `inserted`.
 - **Atomic.** A body that fails validation gets `422` with the failing item
   indexes and nothing is stored. A valid body is written in one `db.batch()`,
   which D1 runs as a transaction, so a request lands whole or not at all.
@@ -599,6 +601,16 @@ pulls it. One source a tick keeps the tick inside the Free plan's 10 ms of CPU,
   and retries with the same back-off. The dashboard shows the message. A Last.fm
   user who hides recent listening gets an error that says so. An expired or
   revoked Spotify token also shows there.
+- **Backfill write cap.** History walks across the account write at most 50,000
+  D1 rows a day, so backfills cannot spend the account's whole 100,000-row daily
+  write budget and starve new-play pulls and uploads. A walk adds its batch's
+  `meta.rows_written` to the shared KV tally `backfill-rows`, which expires at
+  the next 00:00 UTC; a routine pull of new plays writes no tally. Once the
+  tally reaches the cap every pull skips its history walk — the gap drain counts
+  too — and schedules its next pull by the usual rule, so the source keeps
+  collecting new plays. At about 6 rows a play for new tracks the cap admits
+  roughly 8,000 plays a day, so a 50,000-play history backfills in about six
+  days.
 
 stats.fm refreshes Spotify about every 100 minutes
 ([FAQ](https://support.spotistats.app/docs/import/spotify-import)), which is the
@@ -790,11 +802,20 @@ which runs a recorded 300-listen ListenBrainz page
 pool; `PULL_BENCH=1 npx vitest run bench` runs it, and the default suite skips
 it. The deployed figures are `wrangler tail` output from milestone 1.
 
-1. **Cron CPU.** `wrangler tail` measured 41 ms CPU for a tick that pulled a
-   full page of 1,000 already-stored listens before the page shrank to 200.
-   Locally a pull of a 200-listen page, new or stored, measures at 1 to 2 ms of
-   JavaScript, but the phases sit at the pool's 1 ms timer resolution, so the
-   safe figure is an estimated 3 to 5 ms with fetch and D1 binding time. One
+1. **Cron CPU.** `wrangler tail` on 2026-11-12 measured 10 to 23 ms CPU for six
+   ticks that each pulled a 200-listen backfill page of mostly new tracks, with
+   1.1 to 3.0 s of wall time — over the 10 ms limit. The work that grew with new
+   tracks was the per-listen normalisation and the matching batch. Normalisation
+   now runs once per unique artist or title on the page (a 200-listen page holds
+   about 40 artists and 130 titles, not 400 strings), the two clause patterns
+   are skipped when the text holds none of their keywords, and the batch's JSON
+   payloads are deduplicated and carry only the fields each statement reads.
+   Measured locally in Bun with nanosecond timers, an all-new 200-listen page
+   costs about 1.2 ms of JavaScript; at the worst deployed-to-local ratio seen
+   (4×) that is about 5 ms deployed, so the page stays at 200 listens. The
+   upload path shares the same matching code: `wrangler tail` measured 9 ms CPU
+   for an upload of 200 plays on new tracks and 1 to 3 ms for 3-play uploads,
+   and the same local measure is about 0.95 ms, or about 4 ms deployed. One
    source a tick stays under the 10 ms limit, so the plan sustains an estimated
    1,440 pulls a day. With the back-off, an average user needs about 22 pulls a
    day (a fifth of users active at 96, the rest at 4), so the Free plan sustains
@@ -806,9 +827,11 @@ it. The deployed figures are `wrangler tail` output from milestone 1.
 3. **D1 writes.** 100,000 rows a day is about 16,000 new plays a day while
    tracks are new (measured at about 6 rows a play), or 33,000 when the tracks
    are already stored (about 3 rows). A large backfill is heavier: 50,000 plays
-   and their new tracks need an estimated 300,000 rows, three days on Free. D1
-   refuses every query past the cap, including the pull's own write, so the pull
-   records the cap in a KV key that expires at the next 00:00 UTC and ticks
+   and their new tracks need an estimated 300,000 rows, which the 50,000-row
+   backfill cap of [Pulled sources](#pulled-sources) spreads over about six days
+   so pulls of new plays and uploads keep working. If the account cap is still
+   hit, D1 refuses every query past it, including the pull's own write, so the
+   pull records the cap in a KV key that expires at the next 00:00 UTC and ticks
    check it before touching D1.
 4. **Requests.** 100,000 a day is about one a second on average. A cron tick is
    one request, so ticks use 1,440 of them. Public pages are cheap to serve, but
