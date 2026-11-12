@@ -1,0 +1,29 @@
+{
+  "name": "music-stats-web",
+  "main": "src/index.tsx",
+  "compatibility_date": "2026-11-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [{ "pattern": "music.rising.sh", "custom_domain": true }],
+  "triggers": { "crons": ["* * * * *"] },
+  "assets": { "directory": "./public" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "music-stats",
+      // Replace placeholder IDs as described in docs/web-deploy.md.
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      // Replace placeholder IDs as described in docs/web-deploy.md.
+      "id": "REPLACE_WITH_KV_NAMESPACE_ID",
+    },
+  ],
+  "vars": {
+    "LISTENBRAINZ_BASE_URL": "https://api.listenbrainz.org",
+  },
+}
