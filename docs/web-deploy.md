@@ -58,31 +58,44 @@ and add these repository secrets:
 The deploy workflow reads these names. It does not store their values in the
 repository.
 
-## Register the GitHub OAuth App
+## Configure GitHub sign-in
 
-Sign-in uses a GitHub OAuth App with no scopes. Register it under the account
-that owns the deployment: open **Settings → Developer settings → OAuth Apps →
-New OAuth App** and fill in:
+Sign-in uses the shared GitHub OAuth App `rising.sh`, owned by the `risinghq`
+organization. Every rising.sh product uses it, each with its own exact redirect
+URI. Wildcard matching is off. Do not register a new OAuth App.
 
-- **Application name:** `music-stats`
-- **Homepage URL:** `https://music.rising.sh`
-- **Authorization callback URL:** `https://music.rising.sh/auth/github/callback`
+The Worker sends `redirect_uri` as the origin of the request plus
+`/auth/github/callback` ([`web/src/auth.ts`](../web/src/auth.ts)). It is
+`https://music.rising.sh/auth/github/callback` when deployed and
+`http://localhost:8787/auth/github/callback` under `wrangler dev`.
 
-Copy the client id and generate a client secret on the app's page, then store
-both as Worker secrets, from `web/`:
+Open the app as an organization owner: **risinghq → Settings → Developer
+settings → OAuth Apps → rising.sh**. Under **Authorization callback URLs**, add
+one entry for each of these that the app does not list yet:
+
+- `https://music.rising.sh/auth/github/callback`
+- `http://localhost/auth/github/callback`
+
+A fork serving another domain adds `https://<domain>/auth/github/callback`
+instead. GitHub ignores the port of a loopback redirect URI, so the one
+`http://localhost/...` entry covers `wrangler dev` on any port, including 8787.
+
+Generate a client secret for this Worker. On the app's page, under **Client
+secrets**, choose **Generate a new client secret**, and copy the value at once:
+GitHub shows it once. Each Worker has its own secret, so revoking one product's
+secret leaves the others signed in. Copy the app's **Client ID** from the same
+page. Store both as Worker secrets, from `web/`:
 
 ```sh
 npx wrangler secret put GITHUB_CLIENT_ID
 npx wrangler secret put GITHUB_CLIENT_SECRET
 ```
 
-Local `wrangler dev` needs its own OAuth App, because an OAuth App has one
-callback URL. Register a second app with the same name and homepage and the
-callback `http://localhost:8787/auth/github/callback`, and put its values in
-`web/.dev.vars`, which is not committed:
+Local development uses its own client secret, generated the same way, and the
+same client id. Put them in `web/.dev.vars`, and do not commit that file:
 
 ```sh
-GITHUB_CLIENT_ID=the-local-client-id
+GITHUB_CLIENT_ID=the-client-id
 GITHUB_CLIENT_SECRET=the-local-client-secret
 ```
 
