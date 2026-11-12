@@ -9,5 +9,6 @@
 4. [Output](output.md): what the Gist contains.
 5. [Architecture](architecture.md): the code map.
 6. [Releasing](releasing.md): publish a version.
+7. [Web app](web-app.md): the design of the hosted service.
 
 To change the code, start with [Contributing](../.github/contributing.md).
