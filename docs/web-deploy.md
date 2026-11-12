@@ -96,3 +96,34 @@ curl -i 'https://music.rising.sh/u/alice.json?period=week'
 ```
 
 Last.fm configuration is not part of this milestone.
+
+## Add a YouTube Music upload token
+
+An upload token lets the user's GitHub Action post plays to
+`POST /api/v1/upload`. The database keeps only the token's SHA-256 hash, so
+create the token after the user has a `ytmusic` source.
+
+Add the source if the user does not have one yet:
+
+```sh
+npx wrangler d1 execute music-stats --remote --command \
+  "INSERT INTO sources (user_id, kind) VALUES ((SELECT id FROM users WHERE name = 'alice'), 'ytmusic');"
+```
+
+Run the token script from `web/` with the source's id. It prints the token once
+and the SQL that stores its hash:
+
+```sh
+node scripts/make-token.mjs 1
+```
+
+Paste the printed `INSERT` into a remote execute:
+
+```sh
+npx wrangler d1 execute music-stats --remote --command \
+  "INSERT INTO tokens (source_id, hash, hint, created_at) VALUES (1, X'...', '....', unixepoch());"
+```
+
+Store the printed token as `UPLOAD_TOKEN` in the user repository's Actions
+secrets. The token is not stored anywhere else; if it is lost, run the script
+again and revoke the old row by setting `revoked_at`.
