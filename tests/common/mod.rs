@@ -24,11 +24,18 @@ pub fn history_json(shelves: &[(&str, &[(&str, &str)])]) -> Value {
     }]}}})
 }
 
+pub fn video_id_for(title: &str) -> String {
+    title
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
 fn item(title: &str, artist: &str) -> Value {
     json!({"musicResponsiveListItemRenderer": {"flexColumns": [
         {"musicResponsiveListItemFlexColumnRenderer": {"text": {"runs": [{
             "text": title,
-            "navigationEndpoint": {"watchEndpoint": {}},
+            "navigationEndpoint": {"watchEndpoint": {"videoId": video_id_for(title)}},
         }]}}},
         {"musicResponsiveListItemFlexColumnRenderer": {"text": {"runs": [{
             "text": artist,
