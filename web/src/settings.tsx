@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { csrf } from "hono/csrf";
 import {
@@ -12,8 +13,10 @@ import {
   type SignedInUser,
 } from "./auth";
 import type { Env } from "./types";
+import { importPlays, importRemove } from "./import";
 
 const exportPageSize = 1000;
+const importBodyLimit = 64 * 1024;
 
 const exportScript = `
 const exportAll = document.getElementById("export-all");
@@ -73,6 +76,13 @@ const kindNames: Record<string, string> = {
   lastfm: "Last.fm",
   spotify: "Spotify",
   ytmusic: "YouTube Music",
+  spotify_import: "Spotify import",
+  ytmusic_import: "YouTube Music import",
+};
+
+const importSourceNames: Record<string, string> = {
+  spotify_import: "spotify",
+  ytmusic_import: "ytmusic",
 };
 
 function dayText(timestamp: number | null) {
@@ -160,6 +170,12 @@ function settingsPage(
       {error}
     </p>
   );
+  const pulledSources = sources.filter(
+    (source) => !(source.kind in importSourceNames),
+  );
+  const importedSources = sources.filter(
+    (source) => source.kind in importSourceNames,
+  );
   return shell(
     "Settings",
     <>
@@ -231,13 +247,13 @@ function settingsPage(
         <div class="panel-header">
           <h2>Sources</h2>
         </div>
-        {sources.length === 0 ? (
+        {pulledSources.length === 0 ? (
           <p class="empty">
             No sources yet. Connect ListenBrainz or Last.fm to start recording.
           </p>
         ) : (
           <ul class="rows">
-            {sources.map((source) => (
+            {pulledSources.map((source) => (
               <li key={source.id}>
                 <span class="track">
                   <b>{kindNames[source.kind] ?? source.kind}</b>
@@ -320,6 +336,47 @@ function settingsPage(
         <form method="post" action="/settings/tokens">
           <button type="submit">Issue a new token</button>
         </form>
+      </section>
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Import history</h2>
+        </div>
+        <p class="empty">
+          Bring in Spotify's extended streaming history or the watch history of
+          a Google Takeout export. The browser reads the files and sends the
+          plays in small batches; the files never leave this device.
+        </p>
+        <div class="field">
+          <label for="import-files">History files</label>
+          <input id="import-files" type="file" accept=".json" multiple />
+          <small>
+            JSON files only; unzip the export first. A Spotify file is a
+            Streaming_History_Audio file, a Takeout file is watch-history.json.
+          </small>
+        </div>
+        <div>
+          <button id="import-start" type="button">
+            Start the import
+          </button>
+        </div>
+        <p id="import-status" role="status"></p>
+        <ul class="rows" id="import-sources">
+          {importedSources.map((source) => (
+            <li key={source.id}>
+              <span class="track">
+                <b>{kindNames[source.kind] ?? source.kind}</b>
+                <small>last batch {dayText(source.last_ok_at)}</small>
+              </span>
+              <button
+                type="button"
+                data-import-remove={importSourceNames[source.kind]}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+        <script type="module" src="/import.js"></script>
       </section>
       <section class="panel">
         <div class="panel-header">
@@ -644,6 +701,21 @@ settingsApp.post("/tokens", async (context) => {
   });
   return context.redirect("/settings", 303);
 });
+
+const tooLarge = (context: SettingsContext) =>
+  context.json({ error: "the body is over the 64 KiB limit" }, 413);
+
+settingsApp.post(
+  "/import",
+  bodyLimit({ maxSize: importBodyLimit, onError: tooLarge }),
+  importPlays,
+);
+
+settingsApp.post(
+  "/import/remove",
+  bodyLimit({ maxSize: importBodyLimit, onError: tooLarge }),
+  importRemove,
+);
 
 settingsApp.post("/tokens/revoke", async (context) => {
   const user = context.get("user");

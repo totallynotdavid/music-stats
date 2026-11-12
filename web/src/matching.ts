@@ -5,6 +5,7 @@ interface BulkListen extends TrackInput {
   listenedAt: number;
   userId: number;
   sourceId: number;
+  ref?: string;
 }
 
 interface PreparedFields {
@@ -34,6 +35,7 @@ export interface ResolvedListen {
   listenedAt: number;
   userId: number;
   sourceId: number;
+  ref: string;
 }
 
 export interface NewTrack {
@@ -153,7 +155,7 @@ const bulkPlaySql = `
     json_extract(item.value, '$.u'),
     json_extract(item.value, '$.at'),
     json_extract(item.value, '$.s'),
-    '',
+    json_extract(item.value, '$.r'),
     tracks.id
   FROM json_each(?1) AS item
   JOIN tracks ON tracks.key = json_extract(item.value, '$.k')
@@ -323,6 +325,7 @@ function resolvePage(
       listenedAt: input.listenedAt,
       userId: input.userId,
       sourceId: input.sourceId,
+      ref: input.ref ?? "",
     });
   }
 
@@ -435,6 +438,7 @@ export async function storeListens(
       at: listen.listenedAt,
       s: listen.sourceId,
       k: listen.trackKey,
+      r: listen.ref,
     })),
   );
   statements.push(

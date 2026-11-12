@@ -1,11 +1,13 @@
-const daySeconds = 86400;
-const pairWindowSeconds = 600;
+export const daySeconds = 86400;
+export const pairWindowSeconds = 600;
 
 const sourceRank = new Map<string, number>([
   ["spotify", 0],
-  ["listenbrainz", 1],
-  ["lastfm", 2],
-  ["ytmusic", 3],
+  ["spotify_import", 1],
+  ["listenbrainz", 2],
+  ["lastfm", 3],
+  ["ytmusic_import", 4],
+  ["ytmusic", 5],
 ]);
 
 interface PlayRow {
@@ -80,11 +82,7 @@ const markSql = `
     )
 `;
 
-function pairPlays(
-  anchors: PlayRow[],
-  seekers: PlayRow[],
-  dayRule: boolean,
-): PlayRow[] {
+function pairPlays(anchors: PlayRow[], seekers: PlayRow[]): PlayRow[] {
   const candidatesOf = new Map<PlayRow, number[]>();
   const candidates = (seeker: PlayRow) => {
     let list = candidatesOf.get(seeker);
@@ -92,6 +90,7 @@ function pairPlays(
     const day = Math.floor(seeker.at / daySeconds);
     list = [];
     for (const [index, anchor] of anchors.entries()) {
+      const dayRule = anchor.kind === "ytmusic" || seeker.kind === "ytmusic";
       const near = dayRule
         ? Math.floor(anchor.at / daySeconds) === day
         : Math.abs(anchor.at - seeker.at) <= pairWindowSeconds;
@@ -225,8 +224,7 @@ export async function markDuplicates(
       if (pool.length === 0 || seekers.length === 0) continue;
       pool.sort((a, b) => a.at - b.at);
       seekers.sort((a, b) => a.at - b.at);
-      const dayRule = kinds[worse] === "ytmusic";
-      for (const loser of pairPlays(pool, seekers, dayRule)) losers.add(loser);
+      for (const loser of pairPlays(pool, seekers)) losers.add(loser);
     }
   }
   const unmarked = [...losers].filter((play) => play.dup === 0);
