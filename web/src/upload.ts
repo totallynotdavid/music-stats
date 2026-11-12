@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import * as v from "valibot";
 import { alignPage, type Alignment, type PagePair } from "./align";
+import { markDuplicates } from "./duplicates";
 import {
   aliasInsertRows,
   artistInsertRows,
@@ -219,6 +220,15 @@ async function touchReplay(db: D1Database, source: UploadSource, now: number) {
   ]);
 }
 
+function uploadListenedAt(play: UploadPlay) {
+  return Date.parse(`${play.day}T12:00:00.000Z`) / 1000;
+}
+
+function pageDayRange(plays: UploadPlay[]): [number, number] {
+  const times = plays.map(uploadListenedAt);
+  return [Math.min(...times), Math.max(...times)];
+}
+
 async function resolveUpload(
   db: D1Database,
   source: UploadSource,
@@ -230,7 +240,7 @@ async function resolveUpload(
       sourceKey: play.video_id,
       artist: play.artist,
       title: play.title,
-      listenedAt: Date.parse(`${play.day}T12:00:00.000Z`) / 1000,
+      listenedAt: uploadListenedAt(play),
       userId: source.user_id,
       sourceId: source.id,
     }))
@@ -293,7 +303,7 @@ async function storeUpload(
 
   const results = await db.batch(statements);
   if ((results[updateIndex]?.meta?.changes ?? 0) === 0) return null;
-  return playsIndex >= 0 ? listens.length : 0;
+  return { inserted: playsIndex >= 0 ? listens.length : 0, listens };
 }
 
 export async function uploadPlays(context: Context<{ Bindings: Env }>) {
@@ -312,6 +322,11 @@ export async function uploadPlays(context: Context<{ Bindings: Env }>) {
   const pairs: PagePair[] = plays.map((play) => [play.day, play.video_id]);
   const pageJson = JSON.stringify(pairs);
   if (source.last_page === pageJson) {
+    await markDuplicates(
+      context.env.DB,
+      source.user_id,
+      ...pageDayRange(plays),
+    );
     await touchReplay(context.env.DB, source, now);
     return context.json(
       reply(plays.length, 0, source.status === "gap", 0),
@@ -323,18 +338,29 @@ export async function uploadPlays(context: Context<{ Bindings: Env }>) {
       ? null
       : (JSON.parse(source.last_page) as PagePair[]);
   const alignment = alignPage(previous, pairs);
-  const inserted = await storeUpload(
+  const added = plays.slice(0, alignment.newCount);
+  const stored = await storeUpload(
     context.env.DB,
     source,
-    plays.slice(0, alignment.newCount),
+    added,
     alignment,
     pageJson,
     now,
   );
-  if (inserted === null)
+  if (stored === null)
     return context.json({ error: "two uploads raced; send again" }, 409);
+  const times =
+    stored.listens.length > 0
+      ? stored.listens.map((listen) => listen.listenedAt)
+      : pageDayRange(plays);
+  await markDuplicates(
+    context.env.DB,
+    source.user_id,
+    Math.min(...times),
+    Math.max(...times),
+  );
   return context.json(
-    reply(plays.length, inserted, alignment.gap, alignment.ambiguous),
+    reply(plays.length, stored.inserted, alignment.gap, alignment.ambiguous),
     200,
   );
 }

@@ -1,3 +1,4 @@
+import { markDuplicates } from "./duplicates";
 import type { Env, SourceRow } from "./types";
 
 export const maxSourcesPerPull = 1;
@@ -51,6 +52,17 @@ export interface PullHooks<T> {
   waitBetweenPages?: number;
 }
 
+function pageRange<T>(plays: T[], at: (play: T) => number) {
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (const play of plays) {
+    const time = at(play);
+    if (time < min) min = time;
+    if (time > max) max = time;
+  }
+  return [min, max] as const;
+}
+
 export async function pullPages<T>(
   env: Env,
   source: SourceRow,
@@ -64,7 +76,14 @@ export async function pullPages<T>(
   const currentPage = current.plays ?? [];
   waitUntil = current.wait ?? 0;
 
-  let inserted = (await hooks.store(currentPage)).inserted;
+  const currentStore = await hooks.store(currentPage);
+  let inserted = currentStore.inserted;
+  if (currentPage.length > 0)
+    await markDuplicates(
+      env.DB,
+      source.user_id,
+      ...pageRange(currentPage, hooks.at),
+    );
 
   let cursor = source.cursor;
   let backfillBefore = source.backfill_before;
@@ -113,6 +132,11 @@ export async function pullPages<T>(
       const walkResult = await hooks.store(walkPage);
       inserted += walkResult.inserted;
       walkRows = walkResult.rowsWritten;
+      await markDuplicates(
+        env.DB,
+        source.user_id,
+        ...pageRange(walkPage, hooks.at),
+      );
     }
     const pageMin =
       walkPage.length === 0 ? null : Math.min(...walkPage.map(hooks.at));
