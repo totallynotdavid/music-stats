@@ -74,7 +74,7 @@ Formatting and linting follow the repository: oxfmt and oxlint.
 
 ## 2. Data model
 
-All times are Unix seconds in UTC. The schema is one migration. A table holds
+All times are Unix seconds in UTC. The schema is three migrations. A table holds
 only what a query reads.
 
 ```sql
@@ -173,6 +173,21 @@ CREATE TABLE track_totals (
 ) WITHOUT ROWID;
 CREATE INDEX track_totals_top ON track_totals (user_id, plays DESC);
 
+CREATE TABLE daily_totals (
+  user_id INTEGER NOT NULL REFERENCES users (id),
+  day INTEGER NOT NULL,
+  plays INTEGER NOT NULL,
+  PRIMARY KEY (user_id, day)
+) WITHOUT ROWID;
+
+CREATE TABLE artist_totals (
+  user_id INTEGER NOT NULL REFERENCES users (id),
+  artist_id INTEGER NOT NULL REFERENCES artists (id),
+  plays INTEGER NOT NULL,
+  PRIMARY KEY (user_id, artist_id)
+) WITHOUT ROWID;
+CREATE INDEX artist_totals_top ON artist_totals (user_id, plays DESC);
+
 CREATE TRIGGER plays_counted AFTER INSERT ON plays WHEN NEW.dup = 0
 BEGIN
   INSERT INTO track_totals (user_id, track_id, plays, last_played_at)
@@ -189,6 +204,42 @@ BEGIN
   WHERE user_id = NEW.user_id AND track_id = NEW.track_id;
   DELETE FROM track_totals
   WHERE user_id = NEW.user_id AND track_id = NEW.track_id AND plays = 0;
+END;
+
+CREATE TRIGGER plays_day_counted AFTER INSERT ON plays WHEN NEW.dup = 0
+BEGIN
+  INSERT INTO daily_totals (user_id, day, plays)
+  VALUES (NEW.user_id, NEW.played_at / 86400, 1)
+  ON CONFLICT (user_id, day) DO UPDATE SET plays = plays + 1;
+END;
+
+CREATE TRIGGER plays_day_uncounted AFTER UPDATE OF dup ON plays
+WHEN OLD.dup = 0 AND NEW.dup = 1
+BEGIN
+  UPDATE daily_totals SET plays = plays - 1
+  WHERE user_id = NEW.user_id AND day = NEW.played_at / 86400;
+  DELETE FROM daily_totals
+  WHERE user_id = NEW.user_id AND day = NEW.played_at / 86400 AND plays = 0;
+END;
+
+CREATE TRIGGER plays_artist_counted AFTER INSERT ON plays WHEN NEW.dup = 0
+BEGIN
+  INSERT INTO artist_totals (user_id, artist_id, plays)
+  SELECT NEW.user_id, tracks.artist_id, 1
+  FROM tracks WHERE tracks.id = NEW.track_id
+  ON CONFLICT (user_id, artist_id) DO UPDATE SET plays = plays + 1;
+END;
+
+CREATE TRIGGER plays_artist_uncounted AFTER UPDATE OF dup ON plays
+WHEN OLD.dup = 0 AND NEW.dup = 1
+BEGIN
+  UPDATE artist_totals SET plays = plays - 1
+  WHERE user_id = NEW.user_id
+    AND artist_id = (SELECT artist_id FROM tracks WHERE id = NEW.track_id);
+  DELETE FROM artist_totals
+  WHERE user_id = NEW.user_id
+    AND artist_id = (SELECT artist_id FROM tracks WHERE id = NEW.track_id)
+    AND plays = 0;
 END;
 ```
 
@@ -233,11 +284,13 @@ What each part decides:
   serves the uniqueness check and the range scans by time, and a play costs one
   row written. `dup` is 1 when another source holds the same play
   ([Cross-source duplicates](#cross-source-duplicates)).
-- **`track_totals`.** The all-time count of each track per user, kept by the two
-  triggers, so the database enforces the invariant
-  `plays = count of rows with dup = 0`. The all-time view reads the first rows
-  of the `track_totals_top` index. A function that recounts from `plays` repairs
-  the table if it drifts; the nightly cron checks a sample of users.
+- **`track_totals`, `daily_totals`, `artist_totals`.** Per-user counts of each
+  track, of each UTC day and of each artist, kept by the triggers on `plays`, so
+  the database enforces the invariant `plays = count of rows with dup = 0`. The
+  all-time view reads them instead of grouping `plays`: the first rows of
+  `track_totals_top` and `artist_totals_top` for the top lists, and
+  `daily_totals` for the plays per day. A function that recounts from `plays`
+  repairs a table that drifts; the nightly cron checks a sample of users.
 
 ### How a play stays unique
 
@@ -605,12 +658,12 @@ pulls it. One source a tick keeps the tick inside the Free plan's 10 ms of CPU,
   D1 rows a day, so backfills cannot spend the account's whole 100,000-row daily
   write budget and starve new-play pulls and uploads. A walk adds its batch's
   `meta.rows_written` to the shared KV tally `backfill-rows`, which expires at
-  the next 00:00 UTC; a routine pull of new plays writes no tally. Once the
-  tally reaches the cap every pull skips its history walk — the gap drain counts
-  too — and schedules its next pull by the usual rule, so the source keeps
-  collecting new plays. At about 6 rows a play for new tracks the cap admits
-  roughly 8,000 plays a day, so a 50,000-play history backfills in about six
-  days.
+  the next 00:00 UTC; a routine pull of new plays or an upload writes no tally.
+  Once the tally reaches the cap every pull skips its history walk — the gap
+  drain counts too — and schedules its next pull by the usual rule, so the
+  source keeps collecting new plays. At the measured 9.4 rows a play for new
+  tracks the cap admits roughly 5,000 plays a day, so a 50,000-play history
+  backfills in about ten days.
 
 stats.fm refreshes Spotify about every 100 minutes
 ([FAQ](https://support.spotistats.app/docs/import/spotify-import)), which is the
@@ -691,11 +744,11 @@ sign-in screen states that profiles are public.
 **Deleting data.** The settings page has two actions.
 
 - **Remove a source.** One `db.batch()` deletes that source's `plays`, its
-  `tokens` and the `sources` row, then recounts `track_totals` for the user. The
-  Spotify refresh token goes with the row. The user can also revoke the app in
-  their Spotify account.
+  `tokens` and the `sources` row, then recounts the totals tables for the user.
+  The Spotify refresh token goes with the row. The user can also revoke the app
+  in their Spotify account.
 - **Delete the account.** The user types their name to confirm. One batch
-  deletes `plays`, `track_totals`, `tokens`, `sources`, `sessions` and the
+  deletes `plays`, the totals tables, `tokens`, `sources`, `sessions` and the
   `users` row, in that order, so no foreign key fails. No cascade is declared,
   so D1 never scans a table to find children. Cached snapshots in KV are keyed
   by the user id, which is never reused, and expire within a day.
@@ -720,9 +773,11 @@ sign-in screen states that profiles are public.
 - **Figures.** Plays, unique tracks, unique artists, the top tracks, the top
   artists and the plays per day. `week` and `month` read `plays` with the
   primary key prefix `(user_id, played_at >= …)` and group by track. `all` reads
-  `track_totals_top` for the top tracks, and groups `track_totals` for artists.
-  The plan for the weekly query was checked in SQLite: it searches `plays` by
-  the key and groups with one temporary b-tree.
+  the totals tables instead: `track_totals_top` for the top tracks,
+  `artist_totals_top` for the top artists, `daily_totals` for the plays per day,
+  and `track_totals` and `artist_totals` row counts for the summary figures. The
+  plan for the weekly query was checked in SQLite: it searches `plays` by the
+  key and groups with one temporary b-tree.
 - **JSON.**
   `{"schema": 1, "user": …, "period": …, "from": …, "to": …, "plays": …, "unique_tracks": …, "unique_artists": …, "top_tracks": […], "top_artists": […], "daily": […], "updated_at": …}`.
   It sends `Access-Control-Allow-Origin: *`, because it is public data.
@@ -780,20 +835,24 @@ follows.
 
 **What a unit of work costs.**
 
-- A new play on a known track writes about 3 rows: one in `plays`, and the
-  `track_totals` upsert, which D1 bills as two rows because it changes an
-  indexed column
+- A new play on a known track writes 6 rows, measured locally: one in `plays`,
+  the `daily_totals` upsert, and the `track_totals` and `artist_totals` upserts,
+  which D1 bills as two rows each because they change an indexed column
   ([pricing](https://developers.cloudflare.com/d1/platform/pricing/)). A play
-  whose track is new costs more: the deployment measured about 6 rows a play
-  (5,983 rows written for the first 982 plays), because a new track adds its
-  `artists`, `tracks` and `track_aliases` rows and their index entries, shared
-  by all users. A pull with no new plays writes two rows: the `sources` row and
-  its `sources_due` index entry. A play row is an estimated 40 bytes, so 500 MB
-  holds on the order of ten million plays.
+  whose track is new costs more: a 200-play page of new tracks wrote 1,880 rows
+  locally, about 9 a play, because a new track adds its `artists`, `tracks` and
+  `track_aliases` rows and their index entries, shared by all users. A pull with
+  no new plays writes two rows: the `sources` row and its `sources_due` index
+  entry. A play row is an estimated 40 bytes, so 500 MB holds on the order of
+  ten million plays.
 - A profile, JSON or card request with a warm snapshot reads one `users` row and
   one KV key. A cold one reads the rows of the period: about 350 plays for a
-  week of a heavy listener, and about 1,500 for a month.
+  week of a heavy listener, and about 1,500 for a month. `all` reads the totals
+  tables, so a cold `all` snapshot of a 50,000-play history measures about 3 ms
+  locally.
 - A pull costs one or two subrequests to the source and two or three D1 queries.
+- The Worker bundle is 166 KiB, 42 KiB gzip, and evaluating it measures about
+  9.7 ms in Node, locally.
 
 **Where the Free plan runs out,** in the order a service of one-user-per-day
 growth meets the limits. The local figures come from `web/test/bench.test.ts`,
@@ -824,11 +883,11 @@ it. The deployed figures are `wrangler tail` output from milestone 1.
 2. **KV writes.** 1,000 snapshot writes a day cap the number of distinct
    profiles that can refresh in a day. A cold snapshot is still served, so the
    cap costs D1 reads, not availability.
-3. **D1 writes.** 100,000 rows a day is about 16,000 new plays a day while
-   tracks are new (measured at about 6 rows a play), or 33,000 when the tracks
-   are already stored (about 3 rows). A large backfill is heavier: 50,000 plays
-   and their new tracks need an estimated 300,000 rows, which the 50,000-row
-   backfill cap of [Pulled sources](#pulled-sources) spreads over about six days
+3. **D1 writes.** 100,000 rows a day is about 10,000 new plays a day while
+   tracks are new (measured at 9.4 rows a play), or 16,000 when the tracks are
+   already stored (about 6 rows). A large backfill is heavier: 50,000 plays and
+   their new tracks need an estimated 470,000 rows, which the 50,000-row
+   backfill cap of [Pulled sources](#pulled-sources) spreads over about ten days
    so pulls of new plays and uploads keep working. If the account cap is still
    hit, D1 refuses every query past it, including the pull's own write, so the
    pull records the cap in a KV key that expires at the next 00:00 UTC and ticks
@@ -838,7 +897,7 @@ it. The deployed figures are `wrangler tail` output from milestone 1.
    every view of a profile or card is a Worker request.
 
 The first upgrade is Workers Paid at $5 a month. It lifts items 1, 2 and 4 and
-leaves D1 writes at 50 million rows a month, about 16 million plays.
+leaves D1 writes at 50 million rows a month, about 8 million plays.
 
 ### The Last.fm launch gate
 
