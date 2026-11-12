@@ -6,6 +6,8 @@ use serde_json::Value;
 const JSON_PATH: &str = "/contents/singleColumnBrowseResultsRenderer/tabs/0/tabRenderer/content/sectionListRenderer/contents";
 
 const LAST_WEEK_OFFSET_DAYS: i64 = 4;
+const THIS_WEEK_OFFSET_DAYS: i64 = 3;
+const MONTH_MIN_AGE_DAYS: i64 = 14;
 
 pub fn parse_scrobbles(json_str: &str) -> Result<Vec<Scrobble>, Error> {
     parse_scrobbles_on(json_str, Utc::now().date_naive())
@@ -117,15 +119,78 @@ fn resolve_shelf_date(label: &str, today: NaiveDate) -> Option<DateTime<Utc>> {
 
     let date = if let Ok(date) = NaiveDate::parse_from_str(label, "%Y-%m-%d") {
         date
+    } else if let Some(date) = resolve_month_heading(&lower, today) {
+        date
     } else if matches(&["today", "hoy", "hoje", "oggi", "aujourd'hui"]) {
         today
     } else if matches(&["yesterday", "ayer", "ontem", "ieri", "hier"]) {
         today - Duration::days(1)
-    } else if matches(&["last week", "última semana", "semana passada"]) {
+    } else if matches(&[
+        "last week",
+        "última semana",
+        "semana passada",
+        "settimana scorsa",
+        "semaine dernière",
+    ]) {
         today - Duration::days(LAST_WEEK_OFFSET_DAYS)
+    } else if matches(&[
+        "this week",
+        "esta semana",
+        "questa settimana",
+        "cette semaine",
+    ]) {
+        today - Duration::days(THIS_WEEK_OFFSET_DAYS)
     } else {
         return None;
     };
 
     Some(date.and_hms_opt(12, 0, 0)?.and_utc())
+}
+
+/// Reads a heading such as "October 2026", "octubre de 2026" or "octobre 2026".
+/// A month heading only holds plays older than the Last week heading, so the
+/// date is the 15th, moved back to `MONTH_MIN_AGE_DAYS` ago for the current
+/// month and kept inside the month.
+fn resolve_month_heading(lower: &str, today: NaiveDate) -> Option<NaiveDate> {
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let month = words.iter().find_map(|w| month_number(w))?;
+    let year = words
+        .iter()
+        .find(|w| w.len() == 4 && w.chars().all(|c| c.is_ascii_digit()))?
+        .parse()
+        .ok()?;
+
+    let first = NaiveDate::from_ymd_opt(year, month, 1)?;
+    let middle = NaiveDate::from_ymd_opt(year, month, 15)?;
+    let newest = today - Duration::days(MONTH_MIN_AGE_DAYS);
+    Some(middle.min(newest).max(first))
+}
+
+fn month_number(word: &str) -> Option<u32> {
+    const MONTHS: [&[&str]; 12] = [
+        &["january", "enero", "janeiro", "gennaio", "janvier"],
+        &["february", "febrero", "fevereiro", "febbraio", "février"],
+        &["march", "marzo", "março", "mars"],
+        &["april", "abril", "aprile", "avril"],
+        &["may", "mayo", "maio", "maggio", "mai"],
+        &["june", "junio", "junho", "giugno", "juin"],
+        &["july", "julio", "julho", "luglio", "juillet"],
+        &["august", "agosto", "août"],
+        &[
+            "september",
+            "septiembre",
+            "setiembre",
+            "setembro",
+            "settembre",
+            "septembre",
+        ],
+        &["october", "octubre", "outubro", "ottobre", "octobre"],
+        &["november", "noviembre", "novembro", "novembre"],
+        &["december", "diciembre", "dezembro", "dicembre", "décembre"],
+    ];
+    let index = MONTHS.iter().position(|names| names.contains(&word))?;
+    u32::try_from(index + 1).ok()
 }
