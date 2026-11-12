@@ -243,9 +243,31 @@ describe("upload API", () => {
     expect(new Set(plays.results.map((row) => row.track_id)).size).toBe(1);
   });
 
-  it("writes a valid upload in one batch", async () => {
+  it("writes the plays, the source and the token in one batch", async () => {
     await seedUploadSource();
-    const batch = vi.spyOn(env.DB, "batch");
+    async function snapshot() {
+      const plays = await env.DB.prepare(
+        "SELECT played_at, source_id, ref, track_id FROM plays ORDER BY ref",
+      ).all();
+      const sources = await sourceRow();
+      const tokens = await env.DB.prepare(
+        "SELECT last_used_at FROM tokens WHERE source_id = 10",
+      ).first<{ last_used_at: number | null }>();
+      return { plays: plays.results, sources, tokens };
+    }
+    const afterBatch: Array<Awaited<ReturnType<typeof snapshot>>> = [];
+    const db = new Proxy(env.DB, {
+      get(target, property) {
+        const value = Reflect.get(target, property);
+        if (property !== "batch")
+          return typeof value === "function" ? value.bind(target) : value;
+        return async (statements: D1PreparedStatement[]) => {
+          const results = await target.batch(statements);
+          if (afterBatch.length === 0) afterBatch.push(await snapshot());
+          return results;
+        };
+      },
+    });
     const response = await app.fetch(
       new Request("https://music.rising.sh/api/v1/upload", {
         method: "POST",
@@ -255,10 +277,16 @@ describe("upload API", () => {
         },
         body: uploadBody(["c", "b", "a"]),
       }),
-      { DB: env.DB },
+      { DB: db },
     );
     expect(response.status).toBe(200);
-    expect(batch).toHaveBeenCalledTimes(1);
+    const [first] = afterBatch;
+    expect(first.plays).toHaveLength(3);
+    expect(first.sources?.play_seq).toBe(3);
+    expect(first.sources?.last_page).not.toBeNull();
+    expect(first.sources?.last_ok_at).not.toBeNull();
+    expect(first.tokens?.last_used_at).not.toBeNull();
+    expect(await snapshot()).toEqual(first);
   });
 
   it("does not write KV snapshots", async () => {
