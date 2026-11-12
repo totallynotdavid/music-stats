@@ -7,38 +7,37 @@ import type { PeriodStats } from "../src/types";
 const now = Math.floor(Date.now() / 1000);
 
 async function seedUser() {
-  await env.DB.prepare(
-    "INSERT INTO users (id, github_id, name, created_at) VALUES (1, 1, 'alice', ?1)",
-  )
-    .bind(now)
-    .run();
-  await env.DB.prepare(
-    "INSERT INTO sources (id, user_id, kind, account, next_pull_at) VALUES (10, 1, 'listenbrainz', 'alice-lb', ?1)",
-  )
-    .bind(now)
-    .run();
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO users (id, github_id, name, created_at) VALUES (1, 1, 'alice', ?1)",
+    ).bind(now),
+    env.DB.prepare(
+      "INSERT INTO sources (id, user_id, kind, account, next_pull_at) VALUES (10, 1, 'listenbrainz', 'alice-lb', ?1)",
+    ).bind(now),
+  ]);
 }
 
 async function seedTracks(titles: string[]) {
+  const statements: D1PreparedStatement[] = [];
   for (const [index, title] of titles.entries()) {
-    const artist = await env.DB.prepare(
-      "INSERT INTO artists (key, name) VALUES (?1, ?2) RETURNING id",
-    )
-      .bind(`artist-${index}`, `Artist ${index}`)
-      .first<{ id: number }>();
-    const track = await env.DB.prepare(
-      "INSERT INTO tracks (key, artist_id, title) VALUES (?1, ?2, ?3) RETURNING id",
-    )
-      .bind(`artist-${index}${title}`, artist?.id, title)
-      .first<{ id: number }>();
+    const id = index + 1;
+    statements.push(
+      env.DB.prepare(
+        "INSERT INTO artists (id, key, name) VALUES (?1, ?2, ?3)",
+      ).bind(id, `artist-${index}`, `Artist ${index}`),
+      env.DB.prepare(
+        "INSERT INTO tracks (id, key, artist_id, title) VALUES (?1, ?2, ?1, ?3)",
+      ).bind(id, `artist-${index}${title}`, title),
+    );
     for (let play = 0; play < titles.length - index; play += 1) {
-      await env.DB.prepare(
-        "INSERT INTO plays (user_id, played_at, source_id, track_id) VALUES (1, ?1, 10, ?2)",
-      )
-        .bind(now - index * 100 - play, track?.id)
-        .run();
+      statements.push(
+        env.DB.prepare(
+          "INSERT INTO plays (user_id, played_at, source_id, track_id) VALUES (1, ?1, 10, ?2)",
+        ).bind(now - index * 100 - play, id),
+      );
     }
   }
+  await env.DB.batch(statements);
 }
 
 async function fetchCard(query = "") {
