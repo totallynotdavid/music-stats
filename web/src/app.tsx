@@ -2,8 +2,10 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { Env, Period, PeriodStats } from "./types";
 import { getStats } from "./aggregate";
+import { beginGithub, githubCallback, sessionUser } from "./auth";
 import { renderCard, type CardTheme } from "./card";
 import { pullDueSources } from "./cron";
+import { settingsApp, signInPage } from "./settings";
 import { uploadPlays } from "./upload";
 
 const periods: Period[] = ["week", "month", "all"];
@@ -217,6 +219,18 @@ app.post(
   }),
   uploadPlays,
 );
+
+app.get("/", async (context) => {
+  const user = await sessionUser(context);
+  if (user !== null) return context.redirect("/settings", 303);
+  return context.html(signInPage());
+});
+
+app.get("/auth/github", (context) => beginGithub(context));
+
+app.get("/auth/github/callback", (context) => githubCallback(context));
+
+app.route("/settings", settingsApp);
 
 app.get("/u/:path", async (context) => {
   const path = context.req.param("path") ?? "";

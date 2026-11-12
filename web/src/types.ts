@@ -7,6 +7,8 @@ export interface Env {
   LASTFM_BASE_URL?: string;
   LASTFM_API_KEY?: string;
   LASTFM_APPROVAL?: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
 }
 
 export interface SourceRow {
