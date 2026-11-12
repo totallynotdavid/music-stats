@@ -937,8 +937,10 @@ of continuous listening, so a three-hour gap leaves a threefold margin. It
 downloads the binary that [`release.yml`](../.github/workflows/release.yml)
 attaches to a release, with `gh release download`, instead of compiling. Today's
 workflow compiles on every run, which takes minutes. It passes `YOUTUBE_COOKIE`,
-`UPLOAD_TOKEN` and `MUSIC_STATS_TZ`. It keeps the `keepalive` job, because
-GitHub disables a scheduled workflow after 60 days without activity
+`UPLOAD_TOKEN`, `MUSIC_STATS_TZ` and `UPLOAD_URL`. When `UPLOAD_TOKEN` is unset
+the workflow skips the upload job, so the template repository itself and
+Gist-only users see no failing run. It keeps the `keepalive` job, because GitHub
+disables a scheduled workflow after 60 days without activity
 ([GitHub Actions](github-actions.md#schedule)). Google may end a cookie that
 moves to a runner's network, as
 [Providers](providers.md#keep-the-cookie-working) explains. When the upload

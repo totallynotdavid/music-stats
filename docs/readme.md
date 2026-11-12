@@ -1,7 +1,7 @@
 # Manual
 
-1. [GitHub Actions](github-actions.md): update the Gist every day from a
-   repository you own.
+1. [GitHub Actions](github-actions.md): update the Gist or upload your plays, on
+   a schedule, from a repository you own.
 2. [Configuration](configuration.md): environment variables, `.env`, logging and
    errors.
 3. [Providers](providers.md): get Last.fm and YouTube Music credentials, and how
