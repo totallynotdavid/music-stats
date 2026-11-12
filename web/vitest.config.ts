@@ -24,7 +24,10 @@ export default defineConfig({
     cloudflareTest({ wrangler: { configPath: "./wrangler.jsonc" } }),
   ],
   test: {
-    include: ["test/**/*.test.ts"],
+    include:
+      process.env.PULL_BENCH === "1"
+        ? ["test/bench.test.ts"]
+        : ["test/**/*.test.ts", "!test/bench.test.ts"],
     sequence: { concurrent: false },
   },
 });
