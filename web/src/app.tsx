@@ -1,8 +1,10 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { Env, Period, PeriodStats } from "./types";
 import { getStats } from "./aggregate";
 import { renderCard, type CardTheme } from "./card";
 import { pullDueSources } from "./listenbrainz";
+import { uploadPlays } from "./upload";
 
 const periods: Period[] = ["week", "month", "all"];
 
@@ -191,6 +193,16 @@ function profilePage(snapshot: PeriodStats, origin: string) {
 }
 
 export const app = new Hono<{ Bindings: Env }>();
+
+app.post(
+  "/api/v1/upload",
+  bodyLimit({
+    maxSize: 256 * 1024,
+    onError: (context) =>
+      context.json({ error: "the body is over the 256 KiB limit" }, 413),
+  }),
+  uploadPlays,
+);
 
 app.get("/u/:path", async (context) => {
   const path = context.req.param("path") ?? "";

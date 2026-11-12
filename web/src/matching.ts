@@ -120,7 +120,7 @@ export const readTrackSql = `
   ORDER BY id
 `;
 
-const bulkArtistSql = `
+export const bulkArtistSql = `
   INSERT OR IGNORE INTO artists (key, name, mbid)
   SELECT DISTINCT
     json_extract(value, '$.artistKey'),
@@ -129,7 +129,7 @@ const bulkArtistSql = `
   FROM json_each(?1)
 `;
 
-const bulkTrackSql = `
+export const bulkTrackSql = `
   INSERT OR IGNORE INTO tracks (key, artist_id, title, mbid, isrc)
   SELECT
     json_extract(value, '$.key'),
@@ -140,7 +140,7 @@ const bulkTrackSql = `
   FROM json_each(?1)
 `;
 
-const bulkAliasSql = `
+export const bulkAliasSql = `
   INSERT OR IGNORE INTO track_aliases (kind, source_key, track_id)
   SELECT
     ?2,
@@ -317,12 +317,11 @@ async function readAliases(db: D1Database, inputs: BulkListen[], kind: string) {
   return { aliases, tracks };
 }
 
-export async function storeListens(
+export async function resolveStoredPage(
   db: D1Database,
   inputs: BulkListen[],
   kind: string,
-) {
-  if (inputs.length === 0) return 0;
+): Promise<PageResolution> {
   const existing = await readAliases(db, inputs, kind);
   const prepared = new Map<BulkListen, PreparedFields>();
   const candidates: Array<{
@@ -349,9 +348,18 @@ export async function storeListens(
     ).results;
     for (const row of rows) existing.tracks.set(row.id, row);
   }
-  const resolution = resolvePage(inputs, prepared, existing.aliases, [
+  return resolvePage(inputs, prepared, existing.aliases, [
     ...existing.tracks.values(),
   ]);
+}
+
+export async function storeListens(
+  db: D1Database,
+  inputs: BulkListen[],
+  kind: string,
+) {
+  if (inputs.length === 0) return 0;
+  const resolution = await resolveStoredPage(db, inputs, kind);
   const newTracksPayload = JSON.stringify(resolution.newTracks);
   const listensPayload = JSON.stringify(resolution.listens);
   const results = await db.batch([
