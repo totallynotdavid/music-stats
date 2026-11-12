@@ -50,23 +50,29 @@ Worker advances timers across I/O, not during synchronous execution, so the
 per-run `ms` undercounts the purely synchronous stages. `cpuTimeMs` from the
 tail is the figure to compare across routes.
 
-| Route        | Stage measured                                     | Local    | Deployed `cpuTime` |
-| ------------ | -------------------------------------------------- | -------- | ------------------ |
-| `/`          | Empty handler                                      | 8 ms     | 0 ms               |
-| `/json`      | `JSON.parse` of the 200-listen body                | 0.2 ms   | 0-7 ms             |
-| `/parse`     | `v.safeParse` with the ListenBrainz schema         | 0.3 ms   | 3-6 ms             |
-| `/resolve`   | `resolvePageTracks` on the page                    | 0.6 ms   | 6-12 ms            |
-| `/store`     | `storeListensPage`, including the D1 batch         | 5-15 ms  | 6-17 ms            |
-| `/pull`      | `pullListenBrainz` with a fixture fetcher          | 10-30 ms | 5-17 ms            |
-| `/pull-live` | `pullListenBrainz` with real `fetch` of user `rob` | 1.9 s    | 4-28 ms            |
-| `/reset`     | Deletes the bench user's rows                      | -        | -                  |
+| Route             | Stage measured                                     | Local    | Deployed `cpuTime` |
+| ----------------- | -------------------------------------------------- | -------- | ------------------ |
+| `/`               | Empty handler                                      | 8 ms     | 0 ms               |
+| `/json`           | `JSON.parse` of the 200-listen body                | 0.2 ms   | 0-7 ms             |
+| `/parse`          | `v.safeParse` with the ListenBrainz schema         | 0.3 ms   | 3-6 ms             |
+| `/parse-lastfm`   | `v.safeParse` with the Last.fm schema              | ~1 ms    | -                  |
+| `/resolve`        | `resolvePageTracks` on the page                    | 0.6 ms   | 6-12 ms            |
+| `/resolve-lastfm` | `resolvePageTracks` on the Last.fm page            | ~1 ms    | -                  |
+| `/store`          | `storeListensPage`, including the D1 batch         | 5-15 ms  | 6-17 ms            |
+| `/lastfm-store`   | `storeTracksPage`, including the D1 batch          | 8-12 ms  | -                  |
+| `/pull`           | `pullListenBrainz` with a fixture fetcher          | 10-30 ms | 5-17 ms            |
+| `/pull-live`      | `pullListenBrainz` with real `fetch` of user `rob` | 1.9 s    | 4-28 ms            |
+| `/lastfm`         | `pullLastFm` with a fixture fetcher                | 8-12 ms  | -                  |
+| `/reset`          | Deletes the bench user's rows                      | -        | -                  |
 
 The page is the first 200 listens of `web/test/fixtures/listens-rob.json`, the
-same recording `web/test/bench.test.ts` uses. Local figures are medians on this
-host: `/json`, `/parse` and `/resolve` measured in Bun; `/store`, `/pull` and
-`/pull-live` measured through `wrangler dev`, so they hold local D1 and network
-wall time the deployed `cpuTime` counts differently. `/` is the whole request's
-local wall time.
+same recording `web/test/bench.test.ts` uses. The Last.fm local figures come
+from the same bench (`PULL_BENCH=1 npx vitest run bench`): about 1 ms of
+JavaScript per stage and 8 to 12 ms through local D1 for the pull and store.
+Local figures are medians on this host: `/json`, `/parse` and `/resolve`
+measured in Bun; `/store`, `/pull` and `/pull-live` measured through
+`wrangler dev`, so they hold local D1 and network wall time the deployed
+`cpuTime` counts differently. `/` is the whole request's local wall time.
 
 The deployed column is the `cpuTimeMs` range tailed on 2026-11-12 across
 repeat=1, 2 and 5, plus a warm-isolate pass at repeat=1 (`/pull` 7-13,
@@ -77,14 +83,16 @@ D1 batch and its result decoding are, and a cold isolate adds more on top.
 ## What the bench writes
 
 The bench runs as its own user (`id` -1, name `_bench`, which no GitHub login
-can take) with one ListenBrainz source (`id` -1, account `rob`). The store and
-pull routes create those rows when missing (one `INSERT OR IGNORE` batch), and
-the pull routes then park the source (`UPDATE sources SET next_pull_at = NULL`)
-once the runs finish: a pull writes `next_pull_at`, and a due bench source would
-be pulled live by the production cron until the next `/reset`. Each is one
-constant D1 statement inside those routes' `cpuTime`. `/reset` deletes its
-`plays`, the totals-table rows, `tokens`, `sessions`, `sources` and `users`
-rows, and nothing else. The shared catalogue (`artists`, `tracks`,
-`track_aliases`) is not reset: the pull fills it with `INSERT OR IGNORE`, the
-same rows a real pull of the same listens writes. The bench never reads or
-writes any other user's rows.
+can take) with a ListenBrainz source (`id` -1, account `rob`) and a Last.fm
+source (`id` -2, account `fixture`). The Last.fm page is the 200 dated tracks of
+`web/test/fixtures/recenttracks.ts`; its pull routes pass a placeholder API key
+because the fixture fetcher never reaches Last.fm. The store and pull routes
+create those rows when missing (one `INSERT OR IGNORE` batch), and the pull
+routes then park the source (`UPDATE sources SET next_pull_at = NULL`) once the
+runs finish: a pull writes `next_pull_at`, and a due bench source would be
+pulled live by the production cron until the next `/reset`. Each is one constant
+D1 statement inside those routes' `cpuTime`. `/reset` deletes its `plays`, the
+totals-table rows, `tokens`, `sessions`, `sources` and `users` rows, and nothing
+else. The shared catalogue (`artists`, `tracks`, `track_aliases`) is not reset:
+the pull fills it with `INSERT OR IGNORE`, the same rows a real pull of the same
+listens writes. The bench never reads or writes any other user's rows.
