@@ -16,7 +16,7 @@ const ListenSchema = v.object({
   }),
 });
 
-const ResponseSchema = v.object({
+export const ResponseSchema = v.object({
   payload: v.object({ listens: v.array(ListenSchema) }),
 });
 
@@ -86,27 +86,35 @@ const backfillRowsKey = "backfill-rows";
 
 const nextTickDelay = 60;
 
-async function storeListensPage(
+export function listenInputs(
+  listens: Listen[],
+  userId: number,
+  sourceId: number,
+) {
+  return listens.map((listen) => {
+    const info = listen.track_metadata.additional_info;
+    return {
+      kind: "listenbrainz",
+      sourceKey: listenKey(listen),
+      artist: listen.track_metadata.artist_name,
+      title: listen.track_metadata.track_name,
+      mbid: info?.recording_mbid,
+      isrc: info?.isrc,
+      listenedAt: listen.listened_at,
+      userId,
+      sourceId,
+    };
+  });
+}
+
+export async function storeListensPage(
   db: D1Database,
   source: SourceRow,
   listens: Listen[],
 ) {
   return storeListens(
     db,
-    listens.map((listen) => {
-      const info = listen.track_metadata.additional_info;
-      return {
-        kind: "listenbrainz",
-        sourceKey: listenKey(listen),
-        artist: listen.track_metadata.artist_name,
-        title: listen.track_metadata.track_name,
-        mbid: info?.recording_mbid,
-        isrc: info?.isrc,
-        listenedAt: listen.listened_at,
-        userId: source.user_id,
-        sourceId: source.id,
-      };
-    }),
+    listenInputs(listens, source.user_id, source.id),
     "listenbrainz",
   );
 }
@@ -129,24 +137,26 @@ async function recordBackfillRows(env: Env, used: number, now: number) {
   }
 }
 
+export const listenBrainzFetcher: ListenFetcher = async (url) => {
+  const response = await fetch(url);
+  const header = (name: string) => {
+    const raw = response.headers.get(name);
+    if (raw === null) return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : undefined;
+  };
+  return {
+    status: response.status,
+    body: response.ok ? await response.json() : undefined,
+    remaining: header("x-ratelimit-remaining"),
+    resetIn: header("x-ratelimit-reset-in"),
+  };
+};
+
 export async function pullListenBrainz(
   env: Env,
   source: SourceRow,
-  fetcher: ListenFetcher = async (url) => {
-    const response = await fetch(url);
-    const header = (name: string) => {
-      const raw = response.headers.get(name);
-      if (raw === null) return undefined;
-      const value = Number(raw);
-      return Number.isFinite(value) ? value : undefined;
-    };
-    return {
-      status: response.status,
-      body: response.ok ? await response.json() : undefined,
-      remaining: header("x-ratelimit-remaining"),
-      resetIn: header("x-ratelimit-reset-in"),
-    };
-  },
+  fetcher: ListenFetcher = listenBrainzFetcher,
   now = Math.floor(Date.now() / 1000),
 ) {
   if (!source.account) throw new Error("ListenBrainz source has no account");
