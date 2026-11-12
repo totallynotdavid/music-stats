@@ -2,6 +2,8 @@ import type { Context } from "hono";
 import * as v from "valibot";
 import { alignPage, type Alignment, type PagePair } from "./align";
 import {
+  aliasInsertRows,
+  artistInsertRows,
   bulkAliasSql,
   bulkArtistSql,
   bulkTrackSql,
@@ -250,23 +252,25 @@ async function storeUpload(
 
   const statements: D1PreparedStatement[] = [];
   if (newTracks.length > 0) {
-    const newTracksJson = JSON.stringify(newTracks);
     statements.push(
-      db.prepare(bulkArtistSql).bind(newTracksJson),
-      db.prepare(bulkTrackSql).bind(newTracksJson),
+      db.prepare(bulkArtistSql).bind(artistInsertRows(newTracks)),
+      db.prepare(bulkTrackSql).bind(JSON.stringify(newTracks)),
     );
   }
   let playsIndex = -1;
   if (listens.length > 0) {
-    const listensJson = JSON.stringify(
-      listens.map((listen, index) => ({
-        ...listen,
-        ref: `${listen.sourceKey}#${source.play_seq + index + 1}`,
-      })),
-    );
     statements.push(
-      db.prepare(bulkAliasSql).bind(listensJson, "ytmusic"),
-      db.prepare(writePlaySql).bind(listensJson, source.id, source.play_seq),
+      db.prepare(bulkAliasSql).bind(aliasInsertRows(listens), "ytmusic"),
+      db.prepare(writePlaySql).bind(
+        JSON.stringify(
+          listens.map((listen, index) => ({
+            ...listen,
+            ref: `${listen.sourceKey}#${source.play_seq + index + 1}`,
+          })),
+        ),
+        source.id,
+        source.play_seq,
+      ),
     );
     playsIndex = statements.length - 1;
   }

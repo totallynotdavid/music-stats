@@ -80,7 +80,9 @@ async function fetchPage(
 
 export const maxListensPerPull = 200;
 export const maxSourcesPerPull = 1;
+export const maxBackfillRowsPerDay = 50_000;
 const d1CapKey = "d1-capped";
+const backfillRowsKey = "backfill-rows";
 
 const nextTickDelay = 60;
 
@@ -107,6 +109,24 @@ async function storeListensPage(
     }),
     "listenbrainz",
   );
+}
+
+async function backfillRowsUsed(env: Env) {
+  if (!env.CACHE) return 0;
+  const raw = await env.CACHE.get(backfillRowsKey);
+  const used = raw === null ? 0 : Number(raw);
+  return Number.isFinite(used) ? used : 0;
+}
+
+async function recordBackfillRows(env: Env, used: number, now: number) {
+  if (!env.CACHE || used === 0) return;
+  try {
+    await env.CACHE.put(backfillRowsKey, String(used), {
+      expiration: nextUtcMidnight(now),
+    });
+  } catch {
+    // A failed tally write loses the count, not the pull.
+  }
 }
 
 export async function pullListenBrainz(
@@ -155,7 +175,7 @@ export async function pullListenBrainz(
     waitUntil = error.resetIn;
   }
 
-  let inserted = await storeListensPage(env.DB, source, currentPage);
+  let inserted = (await storeListensPage(env.DB, source, currentPage)).inserted;
 
   let cursor = source.cursor;
   let backfillBefore = source.backfill_before;
@@ -185,8 +205,11 @@ export async function pullListenBrainz(
     : backfillBefore !== null && backfillBefore >= 0
       ? backfillBefore
       : null;
+  const backfillRows = walkBound !== null ? await backfillRowsUsed(env) : 0;
+  const backfillCapped =
+    walkBound !== null && backfillRows >= maxBackfillRowsPerDay;
   let walkPage: Listen[] | null = null;
-  if (waitUntil === 0 && budget > 0 && walkBound !== null) {
+  if (waitUntil === 0 && budget > 0 && walkBound !== null && !backfillCapped) {
     try {
       const walk = await fetchPage(
         baseUrl,
@@ -205,9 +228,12 @@ export async function pullListenBrainz(
     }
   }
 
+  let walkRows = 0;
   if (walkPage !== null) {
     if (walkPage.length > 0) {
-      inserted += await storeListensPage(env.DB, source, walkPage);
+      const walkResult = await storeListensPage(env.DB, source, walkPage);
+      inserted += walkResult.inserted;
+      walkRows = walkResult.rowsWritten;
     }
     const pageMin =
       walkPage.length === 0
@@ -238,7 +264,10 @@ export async function pullListenBrainz(
   const frontierLeft = gapBefore !== null || backfillBefore !== null;
   const moreToPull =
     currentPage.length === maxListensPerPull ||
-    (walkPage !== null && walkPage.length === budget && frontierLeft);
+    (!backfillCapped &&
+      walkPage !== null &&
+      walkPage.length === budget &&
+      frontierLeft);
   const idlePulls =
     inserted > 0
       ? 0
@@ -251,6 +280,7 @@ export async function pullListenBrainz(
       : moreToPull
         ? nextTickDelay
         : nextPullDelay(inserted, idlePulls);
+  if (walkRows > 0) await recordBackfillRows(env, backfillRows + walkRows, now);
   await env.DB.prepare(
     `UPDATE sources SET cursor = ?1, backfill_before = ?2, gap_before = ?8,
        gap_floor = ?9, idle_pulls = ?3,
