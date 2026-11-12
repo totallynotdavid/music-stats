@@ -3,17 +3,24 @@ use crate::errors::Error;
 use crate::providers::types::Scrobble;
 use crate::{aggregate, output, providers};
 
+/// The plays of the providers that answered, and the names of those that failed.
+#[derive(Debug)]
+pub struct Fetched {
+    pub scrobbles: Vec<Scrobble>,
+    pub failed: Vec<&'static str>,
+}
+
 pub async fn run(client: &reqwest::Client, config: &Config) -> Result<(), Error> {
-    let scrobbles = fetch_scrobbles(
+    let fetched = fetch_scrobbles(
         client,
         config,
         providers::lastfm::DEFAULT_BASE_URL,
         providers::youtube_http::DEFAULT_BASE_URL,
     )
     .await?;
-    tracing::info!("Fetched {} total scrobbles", scrobbles.len());
+    tracing::info!("Fetched {} total scrobbles", fetched.scrobbles.len());
 
-    let statistics = aggregate::compute_statistics(scrobbles, config.top_n);
+    let statistics = aggregate::compute_statistics(fetched.scrobbles, config.top_n);
     tracing::info!(
         "{} plays, {} unique tracks",
         statistics.total_plays,
@@ -31,7 +38,13 @@ pub async fn run(client: &reqwest::Client, config: &Config) -> Result<(), Error>
     .await?;
     tracing::info!("Updated gist successfully");
 
-    Ok(())
+    if fetched.failed.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::SomeProvidersFailed {
+            providers: fetched.failed,
+        })
+    }
 }
 
 pub async fn fetch_scrobbles(
@@ -39,10 +52,10 @@ pub async fn fetch_scrobbles(
     config: &Config,
     lastfm_base_url: &str,
     youtube_base_url: &str,
-) -> Result<Vec<Scrobble>, Error> {
-    let mut all_scrobbles = Vec::new();
+) -> Result<Fetched, Error> {
+    let mut scrobbles = Vec::new();
     let mut attempted = 0;
-    let mut failed = 0;
+    let mut failed = Vec::new();
 
     if let Some(lastfm) = config.provider.lastfm() {
         attempted += 1;
@@ -55,13 +68,13 @@ pub async fn fetch_scrobbles(
         )
         .await
         {
-            Ok(scrobbles) => {
-                tracing::info!("Last.fm: {} scrobbles", scrobbles.len());
-                all_scrobbles.extend(scrobbles);
+            Ok(plays) => {
+                tracing::info!("Last.fm: {} scrobbles", plays.len());
+                scrobbles.extend(plays);
             }
             Err(error) => {
-                tracing::warn!("Last.fm fetch failed: {}", error);
-                failed += 1;
+                tracing::error!("Last.fm fetch failed: {}", error);
+                failed.push("Last.fm");
             }
         }
     }
@@ -71,20 +84,20 @@ pub async fn fetch_scrobbles(
         match providers::youtube::fetch_scrobbles(client, youtube_base_url, cookie, config.days)
             .await
         {
-            Ok(scrobbles) => {
-                tracing::info!("YouTube: {} scrobbles", scrobbles.len());
-                all_scrobbles.extend(scrobbles);
+            Ok(plays) => {
+                tracing::info!("YouTube: {} scrobbles", plays.len());
+                scrobbles.extend(plays);
             }
             Err(error) => {
-                tracing::warn!("YouTube fetch failed: {}", error);
-                failed += 1;
+                tracing::error!("YouTube fetch failed: {}", error);
+                failed.push("YouTube");
             }
         }
     }
 
-    if attempted > 0 && failed == attempted {
+    if attempted > 0 && failed.len() == attempted {
         return Err(Error::AllProvidersFailed);
     }
 
-    Ok(all_scrobbles)
+    Ok(Fetched { scrobbles, failed })
 }
