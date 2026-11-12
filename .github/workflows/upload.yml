@@ -1,0 +1,61 @@
+name: upload plays
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # jobs.<job>.if cannot read secrets, so a gate job reports whether the
+  # token exists and the upload job is skipped when it does not.
+  token:
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    env:
+      UPLOAD_TOKEN: ${{ secrets.UPLOAD_TOKEN }}
+    steps:
+      - name: Check whether UPLOAD_TOKEN is set
+        id: check
+        run: echo "present=${UPLOAD_TOKEN:+yes}" >> "$GITHUB_OUTPUT"
+
+  upload:
+    needs: token
+    if: needs.token.outputs.present == 'yes'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download the binary the upstream repository released
+        run: |
+          gh release download --repo totallynotdavid/music-stats \
+            --pattern music-stats
+          chmod +x music-stats
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Upload the YouTube Music plays
+        run: ./music-stats
+        env:
+          YOUTUBE_COOKIE: ${{ secrets.YOUTUBE_COOKIE }}
+          UPLOAD_TOKEN: ${{ secrets.UPLOAD_TOKEN }}
+          UPLOAD_URL: ${{ vars.UPLOAD_URL }}
+          MUSIC_STATS_TZ: ${{ vars.MUSIC_STATS_TZ }}
+
+  # GitHub disables a schedule after 60 days without repository activity;
+  # enabling the workflow again resets that clock without a commit.
+  keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+
+    steps:
+      - name: Keep the schedule enabled
+        run: |
+          gh api -X PUT \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/upload.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
