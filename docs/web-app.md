@@ -376,6 +376,8 @@ Content-Type: application/json
 - **Atomic.** A body that fails validation gets `422` with the failing item
   indexes and nothing is stored. A valid body is written in one `db.batch()`,
   which D1 runs as a transaction, so a request lands whole or not at all.
+  Duplicate marks run after the store in their own D1 calls, and a failed mark
+  is redone by the next store or replay over the same span.
 - **Statuses.** `200` for success, even when `inserted` is 0. `401`, `409` (two
   uploads raced, send again), `413`, `415`, `422` and `429` as above. No other
   code is returned for client mistakes.
@@ -905,6 +907,16 @@ The play from the source with the richer evidence stays counted: `spotify`, then
 later, as in a Last.fm backfill after a Spotify play, the same rule marks the
 older row. The code is one function, `markDuplicates`, tested as a table of
 cases.
+
+**Known limit.** A mark is never undone, so a chain of plays that spans more
+than 600 s can count differently by the order its sources arrive. Take a track
+with a ListenBrainz play at noon+300, a Last.fm play at noon+900 and a Spotify
+play at noon. If ListenBrainz and Last.fm are stored first, they are 600 s apart
+and Last.fm is marked. Spotify then arrives, pairs with ListenBrainz and marks
+it, and the marked Last.fm play stays marked: the track counts 1 play. One store
+of all three pairs Spotify with ListenBrainz and leaves Last.fm counted: it
+counts 2. Lifting the limit needs a trigger that recounts a play when `dup` goes
+from 1 to 0.
 
 ## Pulled sources
 
