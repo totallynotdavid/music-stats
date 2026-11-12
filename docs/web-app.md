@@ -607,10 +607,9 @@ cases.
 
 A Cron Trigger runs every minute and calls `scheduled()`. It selects the due
 source whose `next_pull_at` has passed, oldest first, through `sources_due`, and
-pulls it. One source a tick keeps the tick inside the Free plan's 10 ms of CPU,
-50 subrequests and 50 D1 queries per invocation
-([limits](https://developers.cloudflare.com/workers/platform/limits/)), as
-[Limits and costs](#6-limits-and-costs) measures.
+pulls it, one source a tick. [Limits and costs](#6-limits-and-costs) records
+what a tick costs against the Free plan's
+[limits](https://developers.cloudflare.com/workers/platform/limits/).
 
 - **Last.fm.** `user.getrecenttracks` with `limit=200` and `from=cursor+1`
   ([method](https://www.last.fm/api/show/user.getRecentTracks)). The method
@@ -859,27 +858,36 @@ growth meets the limits. The local figures come from `web/test/bench.test.ts`,
 which runs a recorded 300-listen ListenBrainz page
 (`web/test/fixtures/listens-rob.json`) through the pull in the Vitest workerd
 pool; `PULL_BENCH=1 npx vitest run bench` runs it, and the default suite skips
-it. The deployed figures are `wrangler tail` output from milestone 1.
+it. The deployed figures are `wrangler tail` output from milestone 1 and from
+the `web/bench/` worker, which splits a pull into one route per stage.
 
-1. **Cron CPU.** `wrangler tail` on 2026-11-12 measured 10 to 23 ms CPU for six
-   ticks that each pulled a 200-listen backfill page of mostly new tracks, with
-   1.1 to 3.0 s of wall time — over the 10 ms limit. The work that grew with new
-   tracks was the per-listen normalisation and the matching batch. Normalisation
-   now runs once per unique artist or title on the page (a 200-listen page holds
-   about 40 artists and 130 titles, not 400 strings), the two clause patterns
-   are skipped when the text holds none of their keywords, and the batch's JSON
-   payloads are deduplicated and carry only the fields each statement reads.
-   Measured locally in Bun with nanosecond timers, an all-new 200-listen page
-   costs about 1.2 ms of JavaScript; at the worst deployed-to-local ratio seen
-   (4×) that is about 5 ms deployed, so the page stays at 200 listens. The
-   upload path shares the same matching code: `wrangler tail` measured 9 ms CPU
-   for an upload of 200 plays on new tracks and 1 to 3 ms for 3-play uploads,
-   and the same local measure is about 0.95 ms, or about 4 ms deployed. One
-   source a tick stays under the 10 ms limit, so the plan sustains an estimated
-   1,440 pulls a day. With the back-off, an average user needs about 22 pulls a
-   day (a fifth of users active at 96, the rest at 4), so the Free plan sustains
-   about **65 users**. A backfill under way borrows tick capacity, so the true
-   figure is lower while one runs.
+1. **Cron CPU.** A first `wrangler tail` measured 10 to 23 ms CPU for six ticks
+   that each pulled a 200-listen backfill page of mostly new tracks, with 1.1 to
+   3.0 s of wall time. The work that grew with new tracks was the per-listen
+   normalisation and the matching batch. Normalisation now runs once per unique
+   artist or title on the page (a 200-listen page holds about 40 artists and 130
+   titles, not 400 strings), the two clause patterns are skipped when the text
+   holds none of their keywords, and the batch's JSON payloads are deduplicated
+   and carry only the fields each statement reads. A second `wrangler tail` on
+   2026-11-12 measured a pull tick at 16 to 24 ms `cpuTime` for a 200-listen
+   page (16, 17, 20, 23, 24 ms over five ticks), at 12 to 19 ms with the page
+   cut to 50 listens (12, 13, 18, 19 ms over four ticks), and an idle tick with
+   no source due at 1 to 2 ms. Every pull tick is over the 10 ms limit, and the
+   cost barely moves with page size, so most of it is fixed per invocation, not
+   per listen: the local bench measures about 1.2 ms of JavaScript for the same
+   200-listen page. The bench's own tail on 2026-11-12 measured the stages, in
+   `cpuTime`: the empty handler 0 ms, `JSON.parse` of the page 0 to 7 ms, the
+   valibot parse 3 to 6 ms, `resolvePageTracks` 6 to 12 ms, the store step with
+   its D1 batch 6 to 17 ms, a pull with a fixture fetcher 5 to 17 ms, and a pull
+   with a real fetch 4 to 28 ms, with a warm isolate repeating the real pull at
+   4 to 11 ms. Deployed cost runs 5 to 10 times the local figures. The fetch and
+   the JSON parse are not the cost; track resolution, the D1 batch and its
+   result decoding are, and a cold isolate adds more. A warm pull lands at 4 to
+   13 ms, at or over the 10 ms limit. The upload path shares the matching code:
+   `wrangler tail` measured 9 ms CPU for an upload of 200 plays on new tracks
+   and 1 to 3 ms for 3-play uploads, and the same local measure is about 0.95
+   ms. How many pulls a day the Free plan sustains, and so how many users the
+   plan holds, stays unknown.
 2. **KV writes.** 1,000 snapshot writes a day cap the number of distinct
    profiles that can refresh in a day. A cold snapshot is still served, so the
    cap costs D1 reads, not availability.
