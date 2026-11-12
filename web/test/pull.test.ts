@@ -521,7 +521,9 @@ describe("pull scheduling", () => {
     const other = await env.DB.prepare(
       "SELECT * FROM sources WHERE id = 20",
     ).first<SourceRow>();
-    await pullListenBrainz(env, other!, fetcher, now);
+    const pulled = await pullListenBrainz(env, other!, fetcher, now);
+    expect(pulled.inserted).toBe(listens.length);
+    expect(await count("plays")).toBe(listens.length);
     const walkCalls = fetcher.mock.calls.filter(([url]) =>
       new URL(url).searchParams.has("max_ts"),
     );
