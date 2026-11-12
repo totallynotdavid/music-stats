@@ -1,13 +1,28 @@
 use crate::errors::Error;
+use crate::output::upload;
+use chrono_tz::Tz;
 use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Config {
-    pub gist_id: String,
-    pub github_token: String,
+    pub gist: Option<GistConfig>,
+    pub upload: Option<UploadConfig>,
     pub provider: Provider,
+    pub timezone: Tz,
     pub days: u64,
     pub top_n: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct GistConfig {
+    pub id: String,
+    pub token: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct UploadConfig {
+    pub url: String,
+    pub token: String,
 }
 
 #[derive(Debug)]
@@ -50,22 +65,67 @@ pub fn load() -> Result<Config, Error> {
 }
 
 pub fn load_from(env: &HashMap<String, String>) -> Result<Config, Error> {
-    let gist_id = require_env(env, "GIST_ID")?;
-    let github_token = require_env(env, "GH_TOKEN")?;
+    let gist = load_gist(env)?;
+    let provider = load_provider(env)?;
+    let upload = load_upload(env, &provider)?;
+    if gist.is_none() && upload.is_none() {
+        return Err(Error::NoOutputs);
+    }
+
     let days = parse_env(env, "DAYS", 7)?;
     let top_n = parse_env(env, "TOP_N", 5)?;
-
-    let provider = load_provider(env)?;
-
+    let timezone = load_timezone(env)?;
     validate_config(days, top_n)?;
 
     Ok(Config {
-        gist_id,
-        github_token,
+        gist,
+        upload,
         provider,
+        timezone,
         days,
         top_n,
     })
+}
+
+fn load_timezone(env: &HashMap<String, String>) -> Result<Tz, Error> {
+    match lookup_env(env, "MUSIC_STATS_TZ") {
+        Some(name) => name.parse().map_err(|_| Error::InvalidConfig {
+            field: "MUSIC_STATS_TZ".to_string(),
+            reason: format!("{name:?} is not an IANA time zone name such as America/Lima"),
+        }),
+        None => Ok(Tz::UTC),
+    }
+}
+
+fn load_gist(env: &HashMap<String, String>) -> Result<Option<GistConfig>, Error> {
+    let id = lookup_env(env, "GIST_ID");
+    let token = lookup_env(env, "GH_TOKEN");
+
+    match (id, token) {
+        (None, None) => Ok(None),
+        (Some(id), Some(token)) => Ok(Some(GistConfig { id, token })),
+        (Some(_), None) => Err(missing("GH_TOKEN")),
+        (None, Some(_)) => Err(missing("GIST_ID")),
+    }
+}
+
+fn load_upload(
+    env: &HashMap<String, String>,
+    provider: &Provider,
+) -> Result<Option<UploadConfig>, Error> {
+    let Some(token) = lookup_env(env, "UPLOAD_TOKEN") else {
+        return Ok(None);
+    };
+    if provider.youtube_cookie().is_none() {
+        return Err(Error::InvalidConfig {
+            field: "UPLOAD_TOKEN".to_string(),
+            reason: "the upload sends YouTube Music plays, so YOUTUBE_COOKIE must be set"
+                .to_string(),
+        });
+    }
+    let url = lookup_env(env, "UPLOAD_URL").unwrap_or_else(|| upload::DEFAULT_BASE_URL.to_string());
+
+    Ok(Some(UploadConfig { url, token }))
 }
 
 fn load_provider(env: &HashMap<String, String>) -> Result<Provider, Error> {
@@ -103,10 +163,10 @@ fn lookup_env(env: &HashMap<String, String>, key: &str) -> Option<String> {
         .map(String::from)
 }
 
-fn require_env(env: &HashMap<String, String>, key: &str) -> Result<String, Error> {
-    lookup_env(env, key).ok_or_else(|| Error::MissingEnvVar {
-        variable: key.to_string(),
-    })
+fn missing(variable: &str) -> Error {
+    Error::MissingEnvVar {
+        variable: variable.to_string(),
+    }
 }
 
 fn parse_env<T: std::str::FromStr>(

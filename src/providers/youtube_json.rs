@@ -1,6 +1,7 @@
 use crate::errors::Error;
-use crate::providers::types::Scrobble;
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use crate::providers::types::{Scrobble, YouTubePlay};
+use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
+use chrono_tz::Tz;
 use serde_json::Value;
 
 const JSON_PATH: &str = "/contents/singleColumnBrowseResultsRenderer/tabs/0/tabRenderer/content/sectionListRenderer/contents";
@@ -8,12 +9,22 @@ const JSON_PATH: &str = "/contents/singleColumnBrowseResultsRenderer/tabs/0/tabR
 const LAST_WEEK_OFFSET_DAYS: i64 = 4;
 const THIS_WEEK_OFFSET_DAYS: i64 = 3;
 const MONTH_MIN_AGE_DAYS: i64 = 14;
+const MAX_VIDEO_ID_LEN: usize = 32;
 
-pub fn parse_scrobbles(json_str: &str) -> Result<Vec<Scrobble>, Error> {
-    parse_scrobbles_on(json_str, Utc::now().date_naive())
+const NOON: NaiveTime = match NaiveTime::from_hms_opt(12, 0, 0) {
+    Some(time) => time,
+    None => panic!("12:00:00 is a valid time"),
+};
+
+pub fn today_in(now: DateTime<Utc>, tz: Tz) -> NaiveDate {
+    now.with_timezone(&tz).date_naive()
 }
 
-pub fn parse_scrobbles_on(json_str: &str, today: NaiveDate) -> Result<Vec<Scrobble>, Error> {
+pub fn parse_plays(json_str: &str, tz: Tz) -> Result<Vec<YouTubePlay>, Error> {
+    parse_plays_on(json_str, today_in(Utc::now(), tz))
+}
+
+pub fn parse_plays_on(json_str: &str, today: NaiveDate) -> Result<Vec<YouTubePlay>, Error> {
     let json: Value = serde_json::from_str(json_str).map_err(|e| Error::YouTube {
         stage: "json_parsing".to_string(),
         detail: format!("Invalid JSON: {}", e),
@@ -27,11 +38,11 @@ pub fn parse_scrobbles_on(json_str: &str, today: NaiveDate) -> Result<Vec<Scrobb
             detail: "Expected structure not found in JSON".to_string(),
         })?;
 
-    Ok(extract_scrobbles_from_shelves(shelves, today))
+    Ok(extract_plays_from_shelves(shelves, today))
 }
 
-fn extract_scrobbles_from_shelves(shelves: &[Value], today: NaiveDate) -> Vec<Scrobble> {
-    let mut scrobbles = Vec::new();
+fn extract_plays_from_shelves(shelves: &[Value], today: NaiveDate) -> Vec<YouTubePlay> {
+    let mut plays = Vec::new();
 
     for shelf in shelves {
         if let Some(renderer) = shelf.get("musicShelfRenderer") {
@@ -45,7 +56,7 @@ fn extract_scrobbles_from_shelves(shelves: &[Value], today: NaiveDate) -> Vec<Sc
                 .map(Vec::as_slice)
                 .unwrap_or_default();
 
-            let Some(played_at) = resolve_shelf_date(shelf_label, today) else {
+            let Some(heading) = resolve_heading(shelf_label, today) else {
                 if !items.is_empty() {
                     tracing::warn!(
                         "Skipping {} YouTube plays under unrecognized heading {:?}",
@@ -58,26 +69,31 @@ fn extract_scrobbles_from_shelves(shelves: &[Value], today: NaiveDate) -> Vec<Sc
 
             for item in items {
                 if let Some(list_item) = item.get("musicResponsiveListItemRenderer")
-                    && let Some(scrobble) = parse_list_item(list_item, played_at)
+                    && let Some(play) = parse_list_item(list_item, heading)
                 {
-                    scrobbles.push(scrobble);
+                    plays.push(play);
                 }
             }
         }
     }
 
-    scrobbles
+    plays
 }
 
-fn parse_list_item(item: &Value, played_at: DateTime<Utc>) -> Option<Scrobble> {
+fn parse_list_item(item: &Value, heading: Heading) -> Option<YouTubePlay> {
     let flex_columns = item.get("flexColumns")?.as_array()?;
-    let (title, artist) = extract_title_and_artist(flex_columns)?;
+    let (title, artist, video_id) = extract_title_and_artist(flex_columns)?;
 
-    Some(Scrobble::new(artist, title, played_at))
+    Some(YouTubePlay {
+        scrobble: Scrobble::new(artist, title, heading.played_at()),
+        video_id,
+        day: heading.day(),
+    })
 }
 
-fn extract_title_and_artist(columns: &[Value]) -> Option<(String, String)> {
+fn extract_title_and_artist(columns: &[Value]) -> Option<(String, String, Option<String>)> {
     let mut title: Option<String> = None;
+    let mut video_id: Option<String> = None;
     let mut artist: Option<String> = None;
 
     for column in columns {
@@ -91,8 +107,15 @@ fn extract_title_and_artist(columns: &[Value]) -> Option<(String, String)> {
         for run in runs {
             if let Some(endpoint) = run.get("navigationEndpoint") {
                 let text = run.get("text").and_then(Value::as_str).map(String::from);
-                if endpoint.get("watchEndpoint").is_some() {
-                    title = title.or(text);
+                if let Some(watch) = endpoint.get("watchEndpoint") {
+                    if title.is_none() {
+                        title = text;
+                        video_id = watch
+                            .get("videoId")
+                            .and_then(Value::as_str)
+                            .filter(|id| is_video_id(id))
+                            .map(String::from);
+                    }
                 } else if is_artist_endpoint(endpoint) {
                     artist = artist.or(text);
                 }
@@ -103,7 +126,16 @@ fn extract_title_and_artist(columns: &[Value]) -> Option<(String, String)> {
     Some((
         title?,
         artist.unwrap_or_else(|| "Unknown Artist".to_string()),
+        video_id,
     ))
+}
+
+fn is_video_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_VIDEO_ID_LEN
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 fn is_artist_endpoint(endpoint: &Value) -> bool {
@@ -113,18 +145,43 @@ fn is_artist_endpoint(endpoint: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn resolve_shelf_date(label: &str, today: NaiveDate) -> Option<DateTime<Utc>> {
+#[derive(Debug, Clone, Copy)]
+enum Heading {
+    Day(NaiveDate),
+    Span(NaiveDate),
+}
+
+impl Heading {
+    fn date(self) -> NaiveDate {
+        match self {
+            Heading::Day(date) | Heading::Span(date) => date,
+        }
+    }
+
+    fn day(self) -> Option<NaiveDate> {
+        match self {
+            Heading::Day(date) => Some(date),
+            Heading::Span(_) => None,
+        }
+    }
+
+    fn played_at(self) -> DateTime<Utc> {
+        self.date().and_time(NOON).and_utc()
+    }
+}
+
+fn resolve_heading(label: &str, today: NaiveDate) -> Option<Heading> {
     let lower = label.to_lowercase();
     let matches = |words: &[&str]| words.iter().any(|w| lower.contains(w));
 
-    let date = if let Ok(date) = NaiveDate::parse_from_str(label, "%Y-%m-%d") {
-        date
+    let heading = if let Ok(date) = NaiveDate::parse_from_str(label, "%Y-%m-%d") {
+        Heading::Day(date)
     } else if let Some(date) = resolve_month_heading(&lower, today) {
-        date
+        Heading::Span(date)
     } else if matches(&["today", "hoy", "hoje", "oggi", "aujourd'hui"]) {
-        today
+        Heading::Day(today)
     } else if matches(&["yesterday", "ayer", "ontem", "ieri", "hier"]) {
-        today - Duration::days(1)
+        Heading::Day(today - Duration::days(1))
     } else if matches(&[
         "last week",
         "última semana",
@@ -132,19 +189,19 @@ fn resolve_shelf_date(label: &str, today: NaiveDate) -> Option<DateTime<Utc>> {
         "settimana scorsa",
         "semaine dernière",
     ]) {
-        today - Duration::days(LAST_WEEK_OFFSET_DAYS)
+        Heading::Span(today - Duration::days(LAST_WEEK_OFFSET_DAYS))
     } else if matches(&[
         "this week",
         "esta semana",
         "questa settimana",
         "cette semaine",
     ]) {
-        today - Duration::days(THIS_WEEK_OFFSET_DAYS)
+        Heading::Span(today - Duration::days(THIS_WEEK_OFFSET_DAYS))
     } else {
         return None;
     };
 
-    Some(date.and_hms_opt(12, 0, 0)?.and_utc())
+    Some(heading)
 }
 
 /// Reads a heading such as "October 2026", "octubre de 2026" or "octobre 2026".

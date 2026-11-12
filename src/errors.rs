@@ -6,6 +6,7 @@ pub enum Error {
         variable: String,
     },
     NoProviders,
+    NoOutputs,
     AllProvidersFailed,
     SomeProvidersFailed {
         providers: Vec<&'static str>,
@@ -32,6 +33,11 @@ pub enum Error {
         status: u16,
         body: String,
     },
+    Upload {
+        url: String,
+        status: u16,
+        cause: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -46,6 +52,12 @@ impl fmt::Display for Error {
                     "No music providers configured. Set LASTFM_API_KEY+LASTFM_USERNAME or YOUTUBE_COOKIE"
                 )
             }
+            Error::NoOutputs => {
+                write!(
+                    f,
+                    "No output configured. Set GIST_ID+GH_TOKEN, or UPLOAD_TOKEN"
+                )
+            }
             Error::AllProvidersFailed => {
                 write!(
                     f,
@@ -55,7 +67,7 @@ impl fmt::Display for Error {
             Error::SomeProvidersFailed { providers } => {
                 write!(
                     f,
-                    "The Gist was updated without {}, which failed to fetch scrobbles",
+                    "Finished without {}, which failed to fetch scrobbles",
                     providers.join(" and ")
                 )
             }
@@ -85,6 +97,9 @@ impl fmt::Display for Error {
                     "Failed to update gist {} (status {}): {}",
                     gist_id, status, body
                 )
+            }
+            Error::Upload { url, status, cause } => {
+                write!(f, "Upload to {} failed (status {}): {}", url, status, cause)
             }
         }
     }

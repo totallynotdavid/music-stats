@@ -1,4 +1,4 @@
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 
 pub fn cutoff(days: u64) -> DateTime<Utc> {
     i64::try_from(days)
@@ -18,6 +18,13 @@ pub struct Track {
 pub struct Scrobble {
     pub track: Track,
     pub played_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct YouTubePlay {
+    pub scrobble: Scrobble,
+    pub video_id: Option<String>,
+    pub day: Option<NaiveDate>,
 }
 
 impl Scrobble {
