@@ -36,6 +36,7 @@ const paramsOf = (call: unknown[]) => new URL(call[0] as string).searchParams;
 
 async function seedUser(
   source: Partial<{
+    kind: string;
     cursor: number | null;
     backfill_before: number | null;
     play_count: number;
@@ -49,9 +50,10 @@ async function seedUser(
     .run();
   await env.DB.prepare(
     `INSERT INTO sources (id, user_id, kind, account, cursor, backfill_before, next_pull_at, play_count)
-       VALUES (10, 1, 'lastfm', 'alice-fm', ?1, ?2, ?3, ?4)`,
+       VALUES (10, 1, ?1, 'alice-fm', ?2, ?3, ?4, ?5)`,
   )
     .bind(
+      source.kind ?? "lastfm",
       source.cursor ?? null,
       source.backfill_before ?? null,
       now,
@@ -100,7 +102,7 @@ describe("the Last.fm launch gate", () => {
     }
   });
 
-  it("with LASTFM_APPROVAL set serves the three addresses and the page carries the credit", async () => {
+  it("with LASTFM_APPROVAL set serves the three addresses, each with the credit and a one-minute bound", async () => {
     await seedUser();
     env.LASTFM_APPROVAL = "local";
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
@@ -113,15 +115,38 @@ describe("the Last.fm launch gate", () => {
     expect(fetchSpy).toHaveBeenCalled();
     const page = await SELF.fetch("https://music.rising.sh/u/alice");
     expect(page.status).toBe(200);
+    expect(page.headers.get("Cache-Control")).toBe("public, max-age=60");
     const html = await page.text();
     expect(html).toContain("powered by AudioScrobbler");
     expect(html).toContain("https://www.last.fm");
-    for (const path of ["/u/alice.json", "/u/alice.svg"]) {
-      const response = await SELF.fetch(`https://music.rising.sh${path}`);
-      expect(response.status).toBe(200);
-    }
+    const json = await SELF.fetch("https://music.rising.sh/u/alice.json");
+    expect(json.status).toBe(200);
+    expect(json.headers.get("Cache-Control")).toBe("public, max-age=60");
+    expect(await json.json()).toMatchObject({
+      credit: { name: "Last.fm", url: "https://www.last.fm" },
+    });
+    const card = await SELF.fetch("https://music.rising.sh/u/alice.svg");
+    expect(card.status).toBe(200);
+    expect(card.headers.get("Cache-Control")).toBe("public, max-age=60");
+    const svg = await card.text();
+    expect(svg).toContain("powered by AudioScrobbler");
+    expect(svg).toContain("https://www.last.fm");
     const user = await SELF.fetch("https://music.rising.sh/u/unknown");
     expect(user.status).toBe(404);
+  });
+
+  it("serves a user without a Last.fm source with no credit and the fifteen-minute bound", async () => {
+    await seedUser({ kind: "listenbrainz" });
+    env.LASTFM_APPROVAL = "local";
+    const page = await SELF.fetch("https://music.rising.sh/u/alice");
+    expect(page.status).toBe(200);
+    expect(await page.text()).not.toContain("AudioScrobbler");
+    const json = await SELF.fetch("https://music.rising.sh/u/alice.json");
+    expect(json.headers.get("Cache-Control")).toBe("public, max-age=900");
+    expect(await json.json()).not.toHaveProperty("credit");
+    const card = await SELF.fetch("https://music.rising.sh/u/alice.svg");
+    expect(card.headers.get("Cache-Control")).toBe("public, max-age=900");
+    expect(await card.text()).not.toContain("AudioScrobbler");
   });
 });
 

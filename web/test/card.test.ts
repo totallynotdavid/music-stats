@@ -214,4 +214,13 @@ describe("card text", () => {
     expect(svg).toContain("あいうえおかきくけこさし…");
     expect(svg).not.toContain("せそ");
   });
+
+  it("adds the AudioScrobbler credit line in both themes", () => {
+    for (const theme of ["light", "dark"] as const) {
+      const svg = renderCard(snapshot, 5, theme, true);
+      expect(svg).toContain("powered by AudioScrobbler");
+      expect(svg).toContain("https://www.last.fm");
+      expect(renderCard(snapshot, 5, theme)).not.toContain("AudioScrobbler");
+    }
+  });
 });
