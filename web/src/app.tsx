@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Env, Period, PeriodStats } from "./types";
 import { getStats } from "./aggregate";
+import { renderCard, type CardTheme } from "./card";
 import { pullDueSources } from "./listenbrainz";
 
 const periods: Period[] = ["week", "month", "all"];
@@ -11,6 +12,17 @@ function readPeriod(value: string | undefined): Period | null {
     : periods.includes(value as Period)
       ? (value as Period)
       : null;
+}
+
+function readCardSize(value: string | undefined): number | null {
+  if (value === undefined) return 5;
+  if (!/^(?:[1-9]|10)$/.test(value)) return null;
+  return Number(value);
+}
+
+function readTheme(value: string | undefined): CardTheme | null {
+  if (value === undefined) return "light";
+  return value === "light" || value === "dark" ? value : null;
 }
 
 async function findUser(db: D1Database, name: string) {
@@ -70,8 +82,9 @@ function list(items: Array<{ title: string; artist: string; plays: number }>) {
   );
 }
 
-function profilePage(snapshot: PeriodStats) {
+function profilePage(snapshot: PeriodStats, origin: string) {
   const maxDaily = Math.max(1, ...snapshot.daily.map((day) => day.plays));
+  const cardUrl = `${origin}/u/${encodeURIComponent(snapshot.user.name)}.svg`;
   return (
     <html lang="en">
       <head>
@@ -81,6 +94,7 @@ function profilePage(snapshot: PeriodStats) {
           property="og:title"
           content={`${snapshot.user.name}'s listening profile`}
         />
+        <meta property="og:image" content={cardUrl} />
         <link rel="stylesheet" href="/styles.css" />
         <title>{snapshot.user.name} · music stats</title>
       </head>
@@ -179,22 +193,39 @@ function profilePage(snapshot: PeriodStats) {
 export const app = new Hono<{ Bindings: Env }>();
 
 app.get("/u/:path", async (context) => {
-  const path = context.req.param("path");
-  const isJson = path?.endsWith(".json") ?? false;
-  const name = isJson ? path.slice(0, -5) : path;
+  const path = context.req.param("path") ?? "";
+  const format = path.endsWith(".json")
+    ? "json"
+    : path.endsWith(".svg")
+      ? "svg"
+      : "html";
+  const name =
+    format === "json"
+      ? path.slice(0, -5)
+      : format === "svg"
+        ? path.slice(0, -4)
+        : path;
+  const badRequest = (message: string) =>
+    format === "json"
+      ? context.json({ error: message }, 400)
+      : context.text(message, 400);
   const period = readPeriod(context.req.query("period"));
-  if (!period) {
-    return isJson
-      ? context.json({ error: "period must be week, month or all" }, 400)
-      : context.text("period must be week, month or all", 400);
+  if (!period) return badRequest("period must be week, month or all");
+  let card: { size: number; theme: CardTheme } | undefined;
+  if (format === "svg") {
+    const size = readCardSize(context.req.query("n"));
+    if (size === null) return badRequest("n must be between 1 and 10");
+    const theme = readTheme(context.req.query("theme"));
+    if (theme === null) return badRequest("theme must be light or dark");
+    card = { size, theme };
   }
   if (!name)
-    return isJson
+    return format === "json"
       ? context.json({ error: "not found" }, 404)
       : context.text("Not found", 404);
   const user = await findUser(context.env.DB, name);
   if (!user)
-    return isJson
+    return format === "json"
       ? context.json({ error: "not found" }, 404)
       : context.text("Not found", 404);
   const snapshot = await getSnapshot(
@@ -203,17 +234,20 @@ app.get("/u/:path", async (context) => {
     period,
     Math.floor(Date.now() / 1000),
   );
-  if (isJson) {
-    context.header("Access-Control-Allow-Origin", "*");
-    context.header(
-      "Content-Security-Policy",
-      "default-src 'none'; style-src 'unsafe-inline'",
-    );
-    context.header("X-Content-Type-Options", "nosniff");
-    context.header("Cache-Control", "public, max-age=900");
-    return context.json(snapshot);
+  if (format === "html")
+    return context.html(profilePage(snapshot, new URL(context.req.url).origin));
+  context.header(
+    "Content-Security-Policy",
+    "default-src 'none'; style-src 'unsafe-inline'",
+  );
+  context.header("X-Content-Type-Options", "nosniff");
+  context.header("Cache-Control", "public, max-age=900");
+  if (card) {
+    context.header("Content-Type", "image/svg+xml");
+    return context.body(renderCard(snapshot, card.size, card.theme));
   }
-  return context.html(profilePage(snapshot));
+  context.header("Access-Control-Allow-Origin", "*");
+  return context.json(snapshot);
 });
 
 app.notFound((context) => context.text("Not found", 404));
