@@ -9,3 +9,7 @@
 
 # coverage
 /lcov.info
+
+# web dependencies and local Wrangler state
+/web/node_modules
+/web/.wrangler

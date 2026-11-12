@@ -1,6 +1,8 @@
 [tools]
 rust = { version = "1.99.1", components = "rustfmt,clippy,llvm-tools" }
 "aqua:taiki-e/cargo-llvm-cov" = "0.9.1"
+node = "26.13.0"
+"npm:oxlint" = "1.93.0"
 oxfmt = "0.75.0"
 
 [tasks.install]
