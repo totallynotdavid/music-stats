@@ -41,9 +41,19 @@ fn item(title: &str, artist: &str) -> Value {
     ]}})
 }
 
-/// Wraps history JSON in the JavaScript string used by YouTube Music.
-/// Structural characters use `\xNN` escapes, while non-ASCII text stays raw.
+/// Wraps history JSON in the JavaScript string used by YouTube Music, on a
+/// signed-in page. Structural characters use `\xNN` escapes, while non-ASCII
+/// text stays raw.
 pub fn history_page(json: &Value) -> String {
+    page_with_sign_in(json, r#"ytcfg.set({"LOGGED_IN":true});"#)
+}
+
+/// The page YouTube Music returns for a cookie that is no longer signed in.
+pub fn signed_out_page() -> String {
+    page_with_sign_in(&history_json(&[]), r#"ytcfg.set({"LOGGED_IN":false});"#)
+}
+
+fn page_with_sign_in(json: &Value, ytcfg: &str) -> String {
     let escaped = json
         .to_string()
         .replace('{', "\\x7b")
@@ -51,6 +61,6 @@ pub fn history_page(json: &Value) -> String {
         .replace('"', "\\x22");
 
     format!(
-        "<script>initialData.push({{path: '/browse', data: '{escaped}'}});ytcfg.set({{'YTMUSIC_INITIAL_DATA': initialData}});</script>"
+        "<script>{ytcfg}</script><script>initialData.push({{path: '/browse', data: '{escaped}'}});ytcfg.set({{'YTMUSIC_INITIAL_DATA': initialData}});</script>"
     )
 }
