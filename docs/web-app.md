@@ -1088,7 +1088,9 @@ sign-in screen states that profiles are public.
   key and groups with one temporary b-tree.
 - **JSON.**
   `{"schema": 1, "user": …, "period": …, "from": …, "to": …, "plays": …, "unique_tracks": …, "unique_artists": …, "top_tracks": […], "top_artists": […], "daily": […], "updated_at": …}`.
-  It sends `Access-Control-Allow-Origin: *`, because it is public data.
+  A user with a Last.fm source also gets
+  `"credit": {"name": "Last.fm", "url": "https://www.last.fm"}`. It sends
+  `Access-Control-Allow-Origin: *`, because it is public data.
 - **Snapshots.** The figures of one user and period are cached in KV under
   `snap:<user id>:<period>`, with a TTL of 15 minutes for `week` and `month` and
   6 hours for `all`. A request that finds no snapshot computes it from D1 and
@@ -1107,6 +1109,8 @@ sign-in screen states that profiles are public.
 - **Headers.** The SVG and the JSON carry
   `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`,
   `X-Content-Type-Options: nosniff` and `Cache-Control: public, max-age=900`.
+  For a user with a Last.fm source all three addresses send
+  `Cache-Control: public, max-age=60` instead ([gate](#the-lastfm-launch-gate)).
   The third-party text in them is never trusted.
 - **Link preview.** The profile carries `og:title` and `og:image` that points at
   the card.
@@ -1245,19 +1249,20 @@ recorded. The record is the deploy-time variable `LASTFM_APPROVAL` in
 a short reference to the approval, with no personal data, and the commit that
 sets it is the record of when the gate opened. The operator keeps the email.
 
-| State                   | Pulls                                                             | `/u/NAME`, `.json`, `.svg`                                              |
-| ----------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `LASTFM_APPROVAL` empty | The cron skips Last.fm sources, so none of their plays is stored. | `404` for every user who has a Last.fm source, even with other sources. |
-| `LASTFM_APPROVAL` set   | Pulls as in [Pulled sources](#pulled-sources).                    | Served. The page carries the button and the links clause 2.7 asks for.  |
+| State                   | Pulls                                                             | `/u/NAME`, `.json`, `.svg`                                                                                                                                         |
+| ----------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `LASTFM_APPROVAL` empty | The cron skips Last.fm sources, so none of their plays is stored. | `404` for every user who has a Last.fm source, even with other sources.                                                                                            |
+| `LASTFM_APPROVAL` set   | Pulls as in [Pulled sources](#pulled-sources).                    | Served. Each carries the credit clause 4.2.2 asks for: a footer link on the page, a "powered by AudioScrobbler" line on the card and a `credit` field in the JSON. |
 
 While the variable is empty, the settings page shows a Last.fm source as waiting
 for approval. Development does not wait: `.dev.vars`, which `wrangler dev` reads
 and which is not committed, sets `LASTFM_APPROVAL=local`, and a page that only
 the developer's machine serves is not public access. If Last.fm withdraws
 approval, the operator empties the variable and deploys. The pages answer `404`
-at once, and the operator deletes the Last.fm sources' plays with the
-`Remove a source` batch of [section 5](#5-accounts-and-deletion) to meet clause
-9.3.
+at once. All three addresses send `Cache-Control: public, max-age=60`, so a copy
+a browser or an image proxy cached is served for at most one more minute. The
+operator then deletes the Last.fm sources' plays with the `Remove a source`
+batch of [section 5](#5-accounts-and-deletion) to meet clause 9.3.
 
 The rest of the design keeps the other terms. The service stays free and
 ad-free. `sources.play_count` lets the service stop new Last.fm backfills at 2
@@ -1290,12 +1295,12 @@ Each milestone ships on its own and ends with a check a person can run.
    secret name and command, and measures CPU per pull and rows written per play
    on real D1. _Done when_ the history of a public ListenBrainz account renders
    and a second pull inserts nothing.
-2. **Last.fm behind the gate.** The Last.fm pull and the credit button, with
+2. **Last.fm behind the gate.** The Last.fm pull and the credit, with
    `LASTFM_APPROVAL` empty by default ([gate](#the-lastfm-launch-gate)). _Done
    when_ a seeded Last.fm user passes both states in an automated test: with
    `LASTFM_APPROVAL` empty, the three addresses answer `404` and the database
-   holds no play of that source; with it set, they are served and carry the
-   credit.
+   holds no play of that source; with it set, they are served, carry the credit
+   and bound cached copies to one minute.
 3. **Card and cache.** `/u/NAME.svg`, the KV snapshots and the headers. _Done
    when_ a README embeds the card and the CPU of a warm request is under 10 ms.
 4. **Sign-in and self-service.** GitHub OAuth, sessions, the settings page where
