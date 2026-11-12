@@ -206,11 +206,12 @@ What each part decides:
   YouTube Music. `secret` holds the Spotify refresh token, encrypted with
   AES-GCM under a Worker secret, so a leaked database dump holds no usable
   credential. `cursor` is the newest play ingested, and `backfill_before` the
-  oldest, until the history import ends. `next_pull_at` is null for YouTube
-  Music, which pushes. `idle_pulls` drives the back-off in
-  [Pulled sources](#pulled-sources). Three columns serve YouTube Music only.
-  `last_page` is the ordered list of `[day, video id]` pairs of the last
-  accepted upload, as JSON, and `play_seq` counts the plays stored so far.
+  oldest, until the history import ends. `gap_before` and `gap_floor` bound the
+  stretch a full current page skipped, per [Pulled sources](#pulled-sources).
+  `next_pull_at` is null for YouTube Music, which pushes. `idle_pulls` drives
+  the back-off in [Pulled sources](#pulled-sources). Three columns serve YouTube
+  Music only. `last_page` is the ordered list of `[day, video id]` pairs of the
+  last accepted upload, as JSON, and `play_seq` counts the plays stored so far.
   `gap_at` is the time of the last upload that overlapped nothing, and
   `status = 'gap'` marks the source until an upload overlaps again.
   `maybe_missing` is the most plays that repeated songs may have hidden so far.
@@ -549,11 +550,12 @@ cases.
 
 ## Pulled sources
 
-A Cron Trigger runs every minute and calls `scheduled()`. It selects the sources
-whose `next_pull_at` has passed, oldest first, through `sources_due`, and pulls
-them. The batch is small because the Free plan allows 10 ms of CPU, 50
-subrequests and 50 D1 queries per invocation
-([limits](https://developers.cloudflare.com/workers/platform/limits/)).
+A Cron Trigger runs every minute and calls `scheduled()`. It selects the due
+source whose `next_pull_at` has passed, oldest first, through `sources_due`, and
+pulls it. One source a tick keeps the tick inside the Free plan's 10 ms of CPU,
+50 subrequests and 50 D1 queries per invocation
+([limits](https://developers.cloudflare.com/workers/platform/limits/)), as
+[Limits and costs](#6-limits-and-costs) measures.
 
 - **Last.fm.** `user.getrecenttracks` with `limit=200` and `from=cursor+1`
   ([method](https://www.last.fm/api/show/user.getRecentTracks)). The method
@@ -566,11 +568,21 @@ subrequests and 50 D1 queries per invocation
   may change them (clause 4.4 of its terms). The cron pulls it only when
   `LASTFM_APPROVAL` is set.
 - **ListenBrainz.** `GET /1/user/NAME/listens` with `min_ts=cursor` and
-  `count=1000`, and `max_ts` for the backfill, since one call takes only one of
+  `count=200`, and `max_ts` for the backfill, since one call takes only one of
   the two
   ([API](https://listenbrainz.readthedocs.io/en/latest/users/api/core.html)).
   `listened_at` is the playback start. Milestone 1 confirms that a public user's
-  listens need no token.
+  listens need no token. One pull takes up to two calls: the current page, then
+  a walk page for what is left of the 200-listen budget. A page that comes back
+  full means more waits, so the source is due again at the next tick. The API
+  returns the newest `count` listens at or after `min_ts`, so a full current
+  page skips the listens between the old cursor and the page's oldest. That
+  range is the gap: `gap_floor` holds the old cursor and `gap_before` the walk's
+  upper bound, and the walk drains the gap first, stopping when a page's oldest
+  listen reaches `gap_floor`, before `backfill_before` resumes. The pull reads
+  `X-RateLimit-Remaining` and `X-RateLimit-Reset-In`; when the remaining count
+  reaches 0, or a call answers `429`, the source waits out the reset instead of
+  pulling again.
 - **Spotify.** `GET /me/player/recently-played?limit=50&after=cursor` with a
   refresh token. It needs the `user-read-recently-played` scope. The endpoint
   returns at most 50 plays, so a source must be pulled before the user has
@@ -579,8 +591,10 @@ subrequests and 50 D1 queries per invocation
 - **Back-off.** A pull that finds plays sets `idle_pulls` to 0 and
   `next_pull_at` to 15 minutes ahead. An empty pull adds 1 to `idle_pulls` and
   sets the delay to `15 minutes × 2^idle_pulls`, with a ceiling of 6 hours (1
-  hour for Spotify). Last.fm and ListenBrainz keep the whole history, so waiting
-  loses nothing.
+  hour for Spotify). A pull that has more work waiting overrides the back-off
+  and comes due at the next tick; a pull the source rate-limits waits out the
+  reset. Last.fm and ListenBrainz keep the whole history, so waiting loses
+  nothing.
 - **Failure.** A pull that fails sets `status = 'error'` with a short `error`
   and retries with the same back-off. The dashboard shows the message. A Last.fm
   user who hides recent listening gets an error that says so. An expired or
@@ -754,34 +768,48 @@ follows.
 
 **What a unit of work costs.**
 
-- A new play writes about 3 rows: one in `plays`, and the `track_totals` upsert,
-  which D1 bills as two rows because it changes an indexed column
-  ([pricing](https://developers.cloudflare.com/d1/platform/pricing/)). A new
-  track adds its `tracks`, `track_aliases` and key-index rows, shared by all
-  users. A pull with no new plays writes two rows: the `sources` row and its
-  `sources_due` index entry. A play row is an estimated 40 bytes, so 500 MB
+- A new play on a known track writes about 3 rows: one in `plays`, and the
+  `track_totals` upsert, which D1 bills as two rows because it changes an
+  indexed column
+  ([pricing](https://developers.cloudflare.com/d1/platform/pricing/)). A play
+  whose track is new costs more: the deployment measured about 6 rows a play
+  (5,983 rows written for the first 982 plays), because a new track adds its
+  `artists`, `tracks` and `track_aliases` rows and their index entries, shared
+  by all users. A pull with no new plays writes two rows: the `sources` row and
+  its `sources_due` index entry. A play row is an estimated 40 bytes, so 500 MB
   holds on the order of ten million plays.
 - A profile, JSON or card request with a warm snapshot reads one `users` row and
   one KV key. A cold one reads the rows of the period: about 350 plays for a
   week of a heavy listener, and about 1,500 for a month.
-- A pull costs one subrequest to the source and one D1 batch.
+- A pull costs one or two subrequests to the source and two or three D1 queries.
 
 **Where the Free plan runs out,** in the order a service of one-user-per-day
-growth meets the limits. The figures are estimates for milestone 1 to measure
-with `wrangler tail`, which reports CPU time per invocation.
+growth meets the limits. The local figures come from `web/test/bench.test.ts`,
+which runs a recorded 300-listen ListenBrainz page
+(`web/test/fixtures/listens-rob.json`) through the pull in the Vitest workerd
+pool; `PULL_BENCH=1 npx vitest run bench` runs it, and the default suite skips
+it. The deployed figures are `wrangler tail` output from milestone 1.
 
-1. **Cron CPU.** A pull that parses 200 plays takes an estimated 1 to 2 ms, so a
-   10 ms tick pulls about 5 sources: 7,200 pulls a day. With the back-off, an
-   average user needs about 22 pulls a day (a fifth of users active at 96, the
-   rest at 4), so the Free plan sustains about **300 users**.
+1. **Cron CPU.** `wrangler tail` measured 41 ms CPU for a tick that pulled a
+   full page of 1,000 already-stored listens before the page shrank to 200.
+   Locally a pull of a 200-listen page, new or stored, measures at 1 to 2 ms of
+   JavaScript, but the phases sit at the pool's 1 ms timer resolution, so the
+   safe figure is an estimated 3 to 5 ms with fetch and D1 binding time. One
+   source a tick stays under the 10 ms limit, so the plan sustains an estimated
+   1,440 pulls a day. With the back-off, an average user needs about 22 pulls a
+   day (a fifth of users active at 96, the rest at 4), so the Free plan sustains
+   about **65 users**. A backfill under way borrows tick capacity, so the true
+   figure is lower while one runs.
 2. **KV writes.** 1,000 snapshot writes a day cap the number of distinct
    profiles that can refresh in a day. A cold snapshot is still served, so the
    cap costs D1 reads, not availability.
-3. **D1 writes.** 100,000 rows a day is about 33,000 new plays a day, which is
-   1,000 users at 30 plays each, before the pull overhead. A large backfill is
-   heavier: 50,000 plays and their new tracks need about 200,000 rows, two days
-   on Free. D1 refuses writes past the cap, and the pull sets `next_pull_at` to
-   the next 00:00 UTC.
+3. **D1 writes.** 100,000 rows a day is about 16,000 new plays a day while
+   tracks are new (measured at about 6 rows a play), or 33,000 when the tracks
+   are already stored (about 3 rows). A large backfill is heavier: 50,000 plays
+   and their new tracks need an estimated 300,000 rows, three days on Free. D1
+   refuses every query past the cap, including the pull's own write, so the pull
+   records the cap in a KV key that expires at the next 00:00 UTC and ticks
+   check it before touching D1.
 4. **Requests.** 100,000 a day is about one a second on average. A cron tick is
    one request, so ticks use 1,440 of them. Public pages are cheap to serve, but
    every view of a profile or card is a Worker request.
