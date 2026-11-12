@@ -2,7 +2,7 @@ import { applyD1Migrations, env, reset } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import migrations from "virtual:web-migrations";
 import worker from "../bench/index";
-import { pullDueSources } from "../src/listenbrainz";
+import { pullDueSources } from "../src/cron";
 import fixture from "./fixtures/listens-rob.json";
 
 const now = Math.floor(Date.now() / 1000);

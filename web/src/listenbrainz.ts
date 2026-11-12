@@ -1,5 +1,6 @@
 import * as v from "valibot";
 import { storeListens } from "./matching";
+import { pullPages, type FetchedPage } from "./pull";
 import type { Env, SourceRow } from "./types";
 
 const ListenSchema = v.object({
@@ -37,18 +38,6 @@ class RateLimited extends Error {
   }
 }
 
-const idlePullDelay = (idlePulls: number) =>
-  Math.min(6 * 60 * 60, 15 * 60 * 2 ** idlePulls);
-
-function nextPullDelay(inserted: number, idlePulls: number) {
-  return inserted > 0 ? 15 * 60 : idlePullDelay(idlePulls);
-}
-
-const nextUtcMidnight = (now: number) =>
-  Math.floor(now / 86400) * 86400 + 86400;
-
-const dailyLimitPattern = /daily row (?:read|write) limit/i;
-
 function listenKey(listen: Listen) {
   const info = listen.track_metadata.additional_info;
   return (
@@ -79,12 +68,6 @@ async function fetchPage(
 }
 
 export const maxListensPerPull = 200;
-export const maxSourcesPerPull = 1;
-export const maxBackfillRowsPerDay = 50_000;
-const d1CapKey = "d1-capped";
-const backfillRowsKey = "backfill-rows";
-
-const nextTickDelay = 60;
 
 export function listenInputs(
   listens: Listen[],
@@ -119,24 +102,6 @@ export async function storeListensPage(
   );
 }
 
-async function backfillRowsUsed(env: Env) {
-  if (!env.CACHE) return 0;
-  const raw = await env.CACHE.get(backfillRowsKey);
-  const used = raw === null ? 0 : Number(raw);
-  return Number.isFinite(used) ? used : 0;
-}
-
-async function recordBackfillRows(env: Env, used: number, now: number) {
-  if (!env.CACHE || used === 0) return;
-  try {
-    await env.CACHE.put(backfillRowsKey, String(used), {
-      expiration: nextUtcMidnight(now),
-    });
-  } catch {
-    // A failed tally write loses the count, not the pull.
-  }
-}
-
 export const listenBrainzFetcher: ListenFetcher = async (url) => {
   const response = await fetch(url);
   const header = (name: string) => {
@@ -161,203 +126,52 @@ export async function pullListenBrainz(
 ) {
   if (!source.account) throw new Error("ListenBrainz source has no account");
   const baseUrl = env.LISTENBRAINZ_BASE_URL ?? "https://api.listenbrainz.org";
-  let waitUntil = 0;
-  const noteRateLimit = (remaining?: number, resetIn?: number) => {
-    if (remaining === 0 && resetIn !== undefined) waitUntil = resetIn;
+  const username = source.account;
+  const call = async (
+    params: URLSearchParams,
+    limit: number,
+  ): Promise<FetchedPage<Listen>> => {
+    try {
+      const page = await fetchPage(baseUrl, username, params, fetcher);
+      const raw = page.listens.slice(0, limit);
+      return {
+        rawCount: raw.length,
+        plays: raw,
+        wait:
+          page.remaining === 0 && page.resetIn !== undefined ? page.resetIn : 0,
+      };
+    } catch (error) {
+      if (error instanceof RateLimited)
+        return { rawCount: 0, plays: null, wait: error.resetIn };
+      throw error;
+    }
   };
-
-  let currentPage: Listen[] = [];
-  try {
-    const newParams = new URLSearchParams({
-      count: String(maxListensPerPull),
-    });
-    if (source.cursor !== null) newParams.set("min_ts", String(source.cursor));
-    const current = await fetchPage(
-      baseUrl,
-      source.account,
-      newParams,
-      fetcher,
-    );
-    noteRateLimit(current.remaining, current.resetIn);
-    currentPage = current.listens.slice(0, maxListensPerPull);
-  } catch (error) {
-    if (!(error instanceof RateLimited)) throw error;
-    waitUntil = error.resetIn;
-  }
-
-  let inserted = (await storeListensPage(env.DB, source, currentPage)).inserted;
-
-  let cursor = source.cursor;
-  let backfillBefore = source.backfill_before;
-  let gapBefore = source.gap_before;
-  let gapFloor = source.gap_floor;
-  if (currentPage.length > 0) {
-    cursor = Math.max(
-      cursor ?? 0,
-      ...currentPage.map((listen) => listen.listened_at),
-    );
-    const pageMin = Math.min(
-      ...currentPage.map((listen) => listen.listened_at),
-    );
-    if (source.cursor === null) {
-      backfillBefore = pageMin;
-    } else if (currentPage.length === maxListensPerPull) {
-      gapFloor = Math.min(gapFloor ?? source.cursor, source.cursor);
-      gapBefore = Math.max(gapBefore ?? pageMin, pageMin);
-    }
-  }
-
-  const gapActive =
-    gapBefore !== null && gapFloor !== null && gapBefore > gapFloor;
-  const budget = maxListensPerPull - currentPage.length;
-  const walkBound = gapActive
-    ? gapBefore
-    : backfillBefore !== null && backfillBefore >= 0
-      ? backfillBefore
-      : null;
-  const backfillRows = walkBound !== null ? await backfillRowsUsed(env) : 0;
-  const backfillCapped =
-    walkBound !== null && backfillRows >= maxBackfillRowsPerDay;
-  let walkPage: Listen[] | null = null;
-  if (waitUntil === 0 && budget > 0 && walkBound !== null && !backfillCapped) {
-    try {
-      const walk = await fetchPage(
-        baseUrl,
-        source.account,
-        new URLSearchParams({
-          count: String(budget),
-          max_ts: String(walkBound),
-        }),
-        fetcher,
-      );
-      noteRateLimit(walk.remaining, walk.resetIn);
-      walkPage = walk.listens.slice(0, budget);
-    } catch (error) {
-      if (!(error instanceof RateLimited)) throw error;
-      waitUntil = error.resetIn;
-    }
-  }
-
-  let walkRows = 0;
-  if (walkPage !== null) {
-    if (walkPage.length > 0) {
-      const walkResult = await storeListensPage(env.DB, source, walkPage);
-      inserted += walkResult.inserted;
-      walkRows = walkResult.rowsWritten;
-    }
-    const pageMin =
-      walkPage.length === 0
-        ? null
-        : Math.min(...walkPage.map((listen) => listen.listened_at));
-    if (gapActive) {
-      if (
-        pageMin === null ||
-        pageMin <= (gapFloor ?? 0) ||
-        walkPage.length < budget
-      ) {
-        gapBefore = null;
-        gapFloor = null;
-      } else {
-        gapBefore = pageMin;
-      }
-    } else if (walkPage.length < budget) {
-      backfillBefore = null;
-    } else {
-      backfillBefore = pageMin;
-    }
-  }
-
-  if (gapBefore !== null && gapFloor !== null && gapBefore <= gapFloor) {
-    gapBefore = null;
-    gapFloor = null;
-  }
-  const frontierLeft = gapBefore !== null || backfillBefore !== null;
-  const moreToPull =
-    currentPage.length === maxListensPerPull ||
-    (!backfillCapped &&
-      walkPage !== null &&
-      walkPage.length === budget &&
-      frontierLeft);
-  const idlePulls =
-    inserted > 0
-      ? 0
-      : waitUntil > 0 || moreToPull
-        ? source.idle_pulls
-        : source.idle_pulls + 1;
-  const delay =
-    waitUntil > 0
-      ? waitUntil
-      : moreToPull
-        ? nextTickDelay
-        : nextPullDelay(inserted, idlePulls);
-  if (walkRows > 0) await recordBackfillRows(env, backfillRows + walkRows, now);
-  await env.DB.prepare(
-    `UPDATE sources SET cursor = ?1, backfill_before = ?2, gap_before = ?8,
-       gap_floor = ?9, idle_pulls = ?3,
-       next_pull_at = ?4, status = 'active', error = NULL, last_ok_at = ?5,
-       play_count = play_count + ?6 WHERE id = ?7`,
-  )
-    .bind(
-      cursor,
-      backfillBefore,
-      idlePulls,
-      now + delay,
-      now,
-      inserted,
-      source.id,
-      gapBefore,
-      gapFloor,
-    )
-    .run();
-  return { inserted, cursor, backfillBefore };
-}
-
-export async function pullDueSources(
-  env: Env,
-  now = Math.floor(Date.now() / 1000),
-) {
-  if (await env.CACHE?.get(d1CapKey)) return;
-  let result;
-  try {
-    result = await env.DB.prepare(
-      `SELECT id, user_id, kind, account, cursor, backfill_before, gap_before,
-       gap_floor, next_pull_at, idle_pulls
-       FROM sources WHERE next_pull_at IS NOT NULL AND next_pull_at <= ?1
-       ORDER BY next_pull_at, id LIMIT ${maxSourcesPerPull}`,
-    )
-      .bind(now)
-      .all<SourceRow>();
-  } catch (error) {
-    if (error instanceof Error && dailyLimitPattern.test(error.message)) {
-      if (env.CACHE)
-        await env.CACHE.put(d1CapKey, "1", {
-          expiration: nextUtcMidnight(now),
-        });
-      return;
-    }
-    throw error;
-  }
-  for (const source of result.results) {
-    if (source.kind !== "listenbrainz") continue;
-    try {
-      await pullListenBrainz(env, source, undefined, now);
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message.slice(0, 200)
-          : "ListenBrainz pull failed";
-      if (dailyLimitPattern.test(message)) {
-        if (env.CACHE)
-          await env.CACHE.put(d1CapKey, "1", {
-            expiration: nextUtcMidnight(now),
-          });
-        return;
-      }
-      await env.DB.prepare(
-        "UPDATE sources SET status = 'error', error = ?1, idle_pulls = idle_pulls + 1, next_pull_at = ?2 WHERE id = ?3",
-      )
-        .bind(message, now + nextPullDelay(0, source.idle_pulls + 1), source.id)
-        .run();
-    }
-  }
+  return pullPages(
+    env,
+    source,
+    {
+      pageSize: maxListensPerPull,
+      current: (cursor, limit) => {
+        const params = new URLSearchParams({ count: String(limit) });
+        if (cursor !== null) params.set("min_ts", String(cursor));
+        return call(params, limit);
+      },
+      walk: (bound, limit) =>
+        call(
+          new URLSearchParams({
+            count: String(limit),
+            max_ts: String(bound),
+          }),
+          limit,
+        ),
+      at: (listen) => listen.listened_at,
+      store: (listens) =>
+        storeListens(
+          env.DB,
+          listenInputs(listens, source.user_id, source.id),
+          "listenbrainz",
+        ),
+    },
+    now,
+  );
 }
