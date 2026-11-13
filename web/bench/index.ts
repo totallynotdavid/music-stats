@@ -211,7 +211,7 @@ async function seedDups(db: D1Database, kind: string) {
   await db
     .prepare(
       `WITH RECURSIVE n(x) AS (
-       SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x <= 50
+       SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 50
      )
      INSERT OR IGNORE INTO artists (id, key, name)
        SELECT x, 'dartist-' || x, 'Artist ' || x FROM n`,
@@ -220,7 +220,7 @@ async function seedDups(db: D1Database, kind: string) {
   await db
     .prepare(
       `WITH RECURSIVE n(x) AS (
-       SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x <= 500
+       SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 500
      )
      INSERT OR IGNORE INTO tracks (id, key, artist_id, title)
        SELECT x, 'dtrack-' || x, 1 + (x % 50), 'Track ' || x FROM n`,
@@ -232,20 +232,31 @@ async function seedDups(db: D1Database, kind: string) {
   const loserTime =
     kind === "ytmusic" ? "?2 - x * 86400 + 43200" : "?2 - x * 600";
   const base = kind === "ytmusic" ? dayStart : now;
-  for (const [time, sourceId, dup] of [
-    [anchorTime, dupAnchorSourceId, "0"],
-    [loserTime, dupLoserSourceId, "CASE WHEN x > 200 THEN 1 ELSE 0 END"],
+  for (const [time, sourceId] of [
+    [anchorTime, dupAnchorSourceId],
+    [loserTime, dupLoserSourceId],
   ] as const)
     await db
       .prepare(
         `WITH RECURSIVE n(x) AS (
-         SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x <= 5000
+         SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 200
        )
        INSERT INTO plays (user_id, played_at, source_id, ref, track_id, dup)
-         SELECT ?1, ${time}, ?3, 'p' || x, 1 + (x % 500), ${dup} FROM n`,
+         SELECT ?1, ${time}, ?3, 'p' || x, 1 + (x % 500), 0 FROM n`,
       )
       .bind(dupUserId, base, sourceId)
       .run();
+}
+
+async function deleteDups(db: D1Database) {
+  await db.batch([
+    db.prepare("DELETE FROM plays WHERE user_id = ?1").bind(dupUserId),
+    db.prepare("DELETE FROM track_totals WHERE user_id = ?1").bind(dupUserId),
+    db.prepare("DELETE FROM daily_totals WHERE user_id = ?1").bind(dupUserId),
+    db.prepare("DELETE FROM artist_totals WHERE user_id = ?1").bind(dupUserId),
+    db.prepare("DELETE FROM sources WHERE user_id = ?1").bind(dupUserId),
+    db.prepare("DELETE FROM users WHERE id = ?1").bind(dupUserId),
+  ]);
 }
 
 async function dupLoserRange(db: D1Database) {
@@ -422,6 +433,9 @@ export default {
         );
         return Response.json(result);
       }
+      case "/dups-delete":
+        await deleteDups(env.DB);
+        return new Response("deleted\n");
       case "/reset":
         await reset(env.DB);
         return new Response("reset\n");
