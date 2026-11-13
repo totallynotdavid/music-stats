@@ -7,7 +7,8 @@
 
 `music-stats` replaces the content of one file in the Gist. It sends a `PATCH`
 request to `https://api.github.com/gists/<GIST_ID>`
-([`src/output/github.rs`](../src/output/github.rs)), and sets:
+([`src/output/github.rs`](../crates/music-stats/src/output/github.rs)), and
+sets:
 
 - The file `music-stats`, created if the Gist lacks it. Other files in the Gist
   are left alone.
@@ -17,10 +18,10 @@ The file name is the same for every provider.
 
 ### Format
 
-[`src/output/format.rs`](../src/output/format.rs) writes one line per track,
-most played first. The tracks are the top `TOP_N` by play count. Tracks with the
-same count are ordered by artist, then by title, in plain string order, so the
-file is the same from run to run.
+[`src/output/format.rs`](../crates/music-stats/src/output/format.rs) writes one
+line per track, most played first. The tracks are the top `TOP_N` by play count.
+Tracks with the same count are ordered by artist, then by title, in plain string
+order, so the file is the same from run to run.
 
 ```text
 Weird Fishes/ Arpeggi                   Radiohead (4×)
@@ -40,9 +41,10 @@ I Was Here                              Beyoncé
 
 The upload sends the plays of the YouTube Music history page to a service that
 keeps them. It posts to `<UPLOAD_URL>/api/v1/upload`
-([`src/output/upload.rs`](../src/output/upload.rs)) with the header
-`Authorization: Bearer <UPLOAD_TOKEN>`. [Web app](web-app.md#3-upload-api)
-describes the request and the service's replies.
+([`src/output/upload.rs`](../crates/music-stats/src/output/upload.rs)) with the
+header `Authorization: Bearer <UPLOAD_TOKEN>`.
+[Web app](web-app.md#3-upload-api) describes the request and the service's
+replies.
 
 ```json
 {

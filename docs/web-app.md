@@ -30,15 +30,15 @@ the dashboard, so they carry the headers in [Public surface](#public-surface).
 
 ## 1. Layout and languages
 
-One repository, no Cargo workspace. The crate stays at the root, because
-`cargo install music-stats` and the `include` list in
-[`Cargo.toml`](../Cargo.toml) expect it there. That list names `src/**`,
-`Cargo.toml`, `readme.md` and `LICENSE`, so a new `web/` directory never enters
-the published crate.
+One repository. The root `Cargo.toml` is a virtual Cargo workspace over
+`crates/*`, and each directory under `apps/` is a deployed app. The published
+crate is [`crates/music-stats/`](../crates/music-stats/Cargo.toml). Its
+`include` list names `src/**` and `Cargo.toml`, and Cargo adds `readme.md` and
+`LICENSE`, so `apps/web/` never enters the published crate.
 
 ```text
-Cargo.toml, src/        the Rust crate (unchanged location)
-web/
+crates/music-stats/     the Rust crate: Cargo.toml, src/, tests/
+apps/web/
   wrangler.jsonc        Worker, D1, KV, cron, custom domain, assets
   migrations/           D1 migrations, applied with wrangler
   public/               static files: CSS, favicon
@@ -59,8 +59,8 @@ The Worker is TypeScript, for these reasons:
 The frontend is the Worker. The profile page is public and has to carry link
 preview tags, so the Worker renders it as HTML on the server, with the charts as
 inline SVG. The sign-in and settings pages are server-rendered forms. The pages
-need no client script, and the static files in `web/public/` are served by the
-Worker's `assets` binding. Cloudflare documents this route in its
+need no client script, and the static files in `apps/web/public/` are served by
+the Worker's `assets` binding. Cloudflare documents this route in its
 [migration guide](https://developers.cloudflare.com/workers/static-assets/migration-guides/migrate-from-pages/)
 and says Workers offer a broader set of features than Pages. It replaces a
 separate Pages project. One deploy then covers the API and the pages, and no
@@ -511,12 +511,12 @@ time zone, and the page does not say which. A crate that always used UTC would
 show a user whose day ends at another hour a play counted on two days across two
 runs: first under "Today", then under "Yesterday". The crate therefore takes a
 time zone from the setting `MUSIC_STATS_TZ` (an IANA name, default `UTC`), and
-[`youtube_json.rs`](../src/providers/youtube_json.rs) resolves "Today" and
-"Yesterday" in it. A wrong boundary also breaks the alignment, because the same
-play would carry two days on two uploads. Milestone 5 measures the boundary:
-upload hourly for two days and check that no play lands on two days and that no
-upload reports a gap. Until that passes, the design treats a one-day error on
-YouTube Music plays as possible.
+[`youtube_json.rs`](../crates/music-stats/src/providers/youtube_json.rs)
+resolves "Today" and "Yesterday" in it. A wrong boundary also breaks the
+alignment, because the same play would carry two days on two uploads. Milestone
+5 measures the boundary: upload hourly for two days and check that no play lands
+on two days and that no upload reports a gap. Until that passes, the design
+treats a one-day error on YouTube Music plays as possible.
 
 The crate sends only plays that sit under "Today", "Yesterday" or a `YYYY-MM-DD`
 heading. The week and month headings cover several days, and the crate gives
@@ -630,8 +630,8 @@ one 200-listen page, and the Free plan allows 10 ms. The cron cannot drain a
 staged copy either: a pull tick already measures 16 to 24 ms of CPU. So the
 browser does the parsing, and the Worker sees only the plays it keeps.
 
-`web/public/import-parse.js` holds the two keep rules as pure functions, and
-`web/public/import.js` holds the page: it reads one file at a time with
+`apps/web/public/import-parse.js` holds the two keep rules as pure functions,
+and `apps/web/public/import.js` holds the page: it reads one file at a time with
 `File.text()` and `JSON.parse`, keeps the plays, sorts them newest first, and
 posts them in order. The page takes `.json` files only. A ZIP needs a library,
 and the user unzips once. The settings page serves both scripts as static
@@ -860,11 +860,11 @@ The ids come from the sources that have them. Spotify gives `external_ids.isrc`
 ListenBrainz carries `recording_mbid` and `isrc`
 ([listen format](https://listenbrainz.readthedocs.io/en/latest/users/json.html)).
 Last.fm gives an `mbid` field that is empty in most plays; the fixture
-[`recent_tracks.json`](../tests/fixtures/recent_tracks.json) shows it empty. The
-YouTube history page gives a `videoId` in each play's `watchEndpoint`, and a
-`musicVideoType`: `MUSIC_VIDEO_TYPE_ATV` for the audio track and other values
-for music videos and user uploads. The crate does not read `videoId` today. The
-upload change adds it.
+[`recent_tracks.json`](../crates/music-stats/tests/fixtures/recent_tracks.json)
+shows it empty. The YouTube history page gives a `videoId` in each play's
+`watchEndpoint`, and a `musicVideoType`: `MUSIC_VIDEO_TYPE_ATV` for the audio
+track and other values for music videos and user uploads. The crate does not
+read `videoId` today. The upload change adds it.
 
 **Normalisation.** Applied to the artist and to the title, to build the key and
 never to the display text:
@@ -948,10 +948,10 @@ what a tick costs against the Free plan's
   stores the newest page, sets `cursor` and `backfill_before`, and later pulls
   walk back with `to` until a page is empty. A pull skips the now-playing track,
   which has no date, as the crate does
-  ([`lastfm.rs`](../src/providers/lastfm.rs)). The crate waits 200 ms between
-  pages. The Worker does the same, because Last.fm sets its own rate limits and
-  may change them (clause 4.4 of its terms). The cron pulls it only when
-  `LASTFM_APPROVAL` is set.
+  ([`lastfm.rs`](../crates/music-stats/src/providers/lastfm.rs)). The crate
+  waits 200 ms between pages. The Worker does the same, because Last.fm sets its
+  own rate limits and may change them (clause 4.4 of its terms). The cron pulls
+  it only when `LASTFM_APPROVAL` is set.
 - **ListenBrainz.** `GET /1/user/NAME/listens` with `min_ts=cursor` and
   `count=200`, and `max_ts` for the backfill, since one call takes only one of
   the two
@@ -1196,12 +1196,12 @@ follows.
   9.7 ms in Node, locally.
 
 **Where the Free plan runs out,** in the order a service of one-user-per-day
-growth meets the limits. The local figures come from `web/test/bench.test.ts`,
-which runs a recorded 300-listen ListenBrainz page
-(`web/test/fixtures/listens-rob.json`) through the pull in the Vitest workerd
-pool; `PULL_BENCH=1 npx vitest run bench` runs it, and the default suite skips
-it. The deployed figures are `wrangler tail` output from milestone 1 and from
-the `web/bench/` worker, which splits a pull into one route per stage.
+growth meets the limits. The local figures come from
+`apps/web/test/bench.test.ts`, which runs a recorded 300-listen ListenBrainz
+page (`apps/web/test/fixtures/listens-rob.json`) through the pull in the Vitest
+workerd pool; `PULL_BENCH=1 npx vitest run bench` runs it, and the default suite
+skips it. The deployed figures are `wrangler tail` output from milestone 1 and
+from the `apps/web/bench/` worker, which splits a pull into one route per stage.
 
 1. **Cron CPU.** A first `wrangler tail` measured 10 to 23 ms CPU for six ticks
    that each pulled a 200-listen backfill page of mostly new tracks, with 1.1 to
@@ -1219,26 +1219,26 @@ the `web/bench/` worker, which splits a pull into one route per stage.
    per listen: the local bench measures about 1.2 ms of JavaScript for the same
    200-listen page. A 200-track Last.fm page measures the same locally: about 1
    ms of JavaScript for new and for stored plays, and 8 to 12 ms through local
-   D1 against 7 to 8 ms for the ListenBrainz page (`web/test/bench.test.ts`).
-   The bench's own tail on 2026-11-12 measured the stages, in `cpuTime`: the
-   empty handler 0 ms, `JSON.parse` of the page 0 to 7 ms, the valibot parse 3
-   to 6 ms, `resolvePageTracks` 6 to 12 ms, the store step with its D1 batch 6
-   to 17 ms, a pull with a fixture fetcher 5 to 17 ms, and a pull with a real
-   fetch 4 to 28 ms, with a warm isolate repeating the real pull at 4 to 11 ms.
-   Deployed cost runs 5 to 10 times the local figures. The fetch and the JSON
-   parse are not the cost; track resolution, the D1 batch and its result
-   decoding are, and a cold isolate adds more. A warm pull lands at 4 to 13 ms,
-   at or over the 10 ms limit. The upload path shares the matching code:
-   `wrangler tail` measured 9 ms CPU for an upload of 200 plays on new tracks
-   and 1 to 3 ms for 3-play uploads, and the same local measure is about 0.95
-   ms. How many pulls a day the Free plan sustains, and so how many users the
-   plan holds, stays unknown. The duplicate mark runs after every store on the
-   span the page touched. The `web/bench/` worker measured it on 2026-11-13 over
-   the 200 newest plays of the worse-ranked source: each run marked 200 plays,
-   read about 620 rows for the span statement and wrote 1,200 rows, at 7, 12 and
-   7 ms `cpuTime` and 816 to 955 ms of wall time. The 12 ms run is over the 10
-   ms Free limit. The `ytmusic` case, which pairs plays by day rather than by
-   the ten-minute window, is not yet measured.
+   D1 against 7 to 8 ms for the ListenBrainz page
+   (`apps/web/test/bench.test.ts`). The bench's own tail on 2026-11-12 measured
+   the stages, in `cpuTime`: the empty handler 0 ms, `JSON.parse` of the page 0
+   to 7 ms, the valibot parse 3 to 6 ms, `resolvePageTracks` 6 to 12 ms, the
+   store step with its D1 batch 6 to 17 ms, a pull with a fixture fetcher 5 to
+   17 ms, and a pull with a real fetch 4 to 28 ms, with a warm isolate repeating
+   the real pull at 4 to 11 ms. Deployed cost runs 5 to 10 times the local
+   figures. The fetch and the JSON parse are not the cost; track resolution, the
+   D1 batch and its result decoding are, and a cold isolate adds more. A warm
+   pull lands at 4 to 13 ms, at or over the 10 ms limit. The upload path shares
+   the matching code: `wrangler tail` measured 9 ms CPU for an upload of 200
+   plays on new tracks and 1 to 3 ms for 3-play uploads, and the same local
+   measure is about 0.95 ms. How many pulls a day the Free plan sustains, and so
+   how many users the plan holds, stays unknown. The duplicate mark runs after
+   every store on the span the page touched. The `apps/web/bench/` worker
+   measured it on 2026-11-13 over the 200 newest plays of the worse-ranked
+   source: each run marked 200 plays, read about 620 rows for the span statement
+   and wrote 1,200 rows, at 7, 12 and 7 ms `cpuTime` and 816 to 955 ms of wall
+   time. The 12 ms run is over the 10 ms Free limit. The `ytmusic` case, which
+   pairs plays by day rather than by the ten-minute window, is not yet measured.
 2. **KV writes.** 1,000 snapshot writes a day cap the number of distinct
    profiles that can refresh in a day. A cold snapshot is still served, so the
    cap costs D1 reads, not availability.
@@ -1322,9 +1322,9 @@ milestone 2.
 
 Each milestone ships on its own and ends with a check a person can run.
 
-1. **ListenBrainz, profile, JSON.** `web/` with `wrangler.jsonc`, the migration,
-   the custom domain `music.rising.sh` and a deploy workflow. Users are rows
-   added with `wrangler d1 execute`, with no sign-in. The cron pulls
+1. **ListenBrainz, profile, JSON.** `apps/web/` with `wrangler.jsonc`, the
+   migration, the custom domain `music.rising.sh` and a deploy workflow. Users
+   are rows added with `wrangler d1 execute`, with no sign-in. The cron pulls
    ListenBrainz with backfill. `/u/NAME` and `/u/NAME.json` work for the three
    periods. The milestone writes `docs/web-deploy.md` with every account step,
    secret name and command, and measures CPU per pull and rows written per play
@@ -1372,9 +1372,9 @@ Each milestone ships on its own and ends with a check a person can run.
    ([File imports](#file-imports)). Both carry timestamps and no credential, and
    both reach back beyond what an API holds. The milestone adds migration
    `0005_imports.sql`, `POST /settings/import`, `POST /settings/import/remove`,
-   the import panel on the settings page, `web/public/import-parse.js` and
-   `web/public/import.js`, a `ref` per play in `storeListens`, and the two kinds
-   in the rank list and day test of `markDuplicates`. It measures, on the
+   the import panel on the settings page, `apps/web/public/import-parse.js` and
+   `apps/web/public/import.js`, a `ref` per play in `storeListens`, and the two
+   kinds in the rank list and day test of `markDuplicates`. It measures, on the
    deployed Worker and real D1, the CPU of a 100-play batch on new tracks (the
    batch size drops if it is over 8 ms), the rows written per play for known and
    new tracks, and the rows written per play of a removal chunk. _Done when_

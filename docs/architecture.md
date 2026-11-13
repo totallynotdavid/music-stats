@@ -3,7 +3,8 @@
 `music-stats` fetches plays from one or two providers, counts them and writes
 the top tracks to a Gist. It can also upload the YouTube Music plays to a
 service. It is a library crate with a thin binary, so the tests in `tests/` can
-call every module.
+call every module. The crate lives in `crates/music-stats/`, and the `src/` and
+`tests/` paths on this page are relative to it.
 
 ```text
 main → config::load → app::run

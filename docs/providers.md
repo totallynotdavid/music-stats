@@ -18,8 +18,8 @@ covers most listeners.
 Variables: `LASTFM_API_KEY` and `LASTFM_USERNAME`. Get a key at
 <https://www.last.fm/api>.
 
-[`src/providers/lastfm.rs`](../src/providers/lastfm.rs) calls the
-`user.getrecenttracks` method for plays from the last `DAYS` days:
+[`src/providers/lastfm.rs`](../crates/music-stats/src/providers/lastfm.rs) calls
+the `user.getrecenttracks` method for plays from the last `DAYS` days:
 
 - It reads 200 tracks per page and waits 200 ms between pages.
 - It stops after 10 pages, which is 2000 plays. If Last.fm has more, the program
@@ -32,8 +32,8 @@ Variable: `YOUTUBE_COOKIE`. Its value is the `Cookie` request header your
 browser sends to `music.youtube.com` while you are signed in. It must contain
 `__Secure-3PAPISID`.
 
-[`src/providers/youtube_http.rs`](../src/providers/youtube_http.rs) requests
-<https://music.youtube.com/history> with:
+[`src/providers/youtube_http.rs`](../crates/music-stats/src/providers/youtube_http.rs)
+requests <https://music.youtube.com/history> with:
 
 - A `Cookie` header made from your cookie. It removes the characters U+0100 to
   U+FFFF, collapses runs of whitespace, and appends `SOCS=CAI` if the cookie has
@@ -71,13 +71,14 @@ GitHub Actions runner.
 YouTube Music has no other way in for a program like this. Google's OAuth device
 flow for YouTube Music has refused new tokens since August 2025.
 
-[`src/providers/youtube_parse.rs`](../src/providers/youtube_parse.rs) takes the
-history data out of the page, and decodes its `\xNN` escapes as UTF-8, so titles
-and artists keep their non-ASCII characters.
-[`src/providers/youtube_json.rs`](../src/providers/youtube_json.rs) reads the
-data. The history groups plays under date headings, and the page gives no time
-of day, so each play takes the date of its heading, at 12:00 UTC. "Today" is the
-current day in the time zone `MUSIC_STATS_TZ` names (UTC by default):
+[`src/providers/youtube_parse.rs`](../crates/music-stats/src/providers/youtube_parse.rs)
+takes the history data out of the page, and decodes its `\xNN` escapes as UTF-8,
+so titles and artists keep their non-ASCII characters.
+[`src/providers/youtube_json.rs`](../crates/music-stats/src/providers/youtube_json.rs)
+reads the data. The history groups plays under date headings, and the page gives
+no time of day, so each play takes the date of its heading, at 12:00 UTC.
+"Today" is the current day in the time zone `MUSIC_STATS_TZ` names (UTC by
+default):
 
 | Heading                                                   | Date used                |
 | --------------------------------------------------------- | ------------------------ |

@@ -57,8 +57,9 @@ writes `lcov.info`. The workflow uploads the report to Codecov, with the
 
 ## Refresh the test fixtures
 
-`tests/fixtures/` holds a real Last.fm response and a YouTube Music history
-page. To download new ones, export the provider variables you have and run:
+`crates/music-stats/tests/fixtures/` holds a real Last.fm response and a YouTube
+Music history page. To download new ones, export the provider variables you have
+and run:
 
 ```sh
 mise run fetch-fixtures

@@ -8,11 +8,11 @@ for listening history and a KV namespace for profile snapshots.
 Sign in to the [Cloudflare dashboard](https://dash.cloudflare.com/) with an
 account that owns the `rising.sh` zone and can create Workers resources.
 
-From the repository root, enter `web/`, install the pinned tools, then log
+From the repository root, enter `apps/web/`, install the pinned tools, then log
 Wrangler in:
 
 ```sh
-cd web
+cd apps/web
 mise install
 npx wrangler login
 ```
@@ -20,7 +20,7 @@ npx wrangler login
 Create the D1 database and copy the returned database ID:
 
 ```sh
-cd web
+cd apps/web
 npx wrangler d1 create music-stats
 ```
 
@@ -31,12 +31,12 @@ npx wrangler kv namespace create CACHE
 ```
 
 Replace `REPLACE_WITH_D1_DATABASE_ID` and `REPLACE_WITH_KV_NAMESPACE_ID` in
-[`web/wrangler.jsonc`](../web/wrangler.jsonc) with those IDs. Keep the bindings
-named `DB` and `CACHE`.
+[`apps/web/wrangler.jsonc`](../apps/web/wrangler.jsonc) with those IDs. Keep the
+bindings named `DB` and `CACHE`.
 
 ## Apply the schema
 
-From `web/`, apply the migration to the remote database:
+From `apps/web/`, apply the migration to the remote database:
 
 ```sh
 npx wrangler d1 migrations apply music-stats --remote
@@ -65,8 +65,8 @@ organization. Every rising.sh product uses it, each with its own exact redirect
 URI. Wildcard matching is off. Do not register a new OAuth App.
 
 The Worker sends `redirect_uri` as the origin of the request plus
-`/auth/github/callback` ([`web/src/auth.ts`](../web/src/auth.ts)). It is
-`https://music.rising.sh/auth/github/callback` when deployed and
+`/auth/github/callback` ([`apps/web/src/auth.ts`](../apps/web/src/auth.ts)). It
+is `https://music.rising.sh/auth/github/callback` when deployed and
 `http://localhost:8787/auth/github/callback` under `wrangler dev`.
 
 Open the app as an organization owner: **risinghq → Settings → Developer
@@ -84,7 +84,7 @@ Generate a client secret for this Worker. On the app's page, under **Client
 secrets**, choose **Generate a new client secret**, and copy the value at once:
 GitHub shows it once. Each Worker has its own secret, so revoking one product's
 secret leaves the others signed in. Copy the app's **Client ID** from the same
-page. Store both as Worker secrets, from `web/`:
+page. Store both as Worker secrets, from `apps/web/`:
 
 ```sh
 npx wrangler secret put GITHUB_CLIENT_ID
@@ -92,7 +92,7 @@ npx wrangler secret put GITHUB_CLIENT_SECRET
 ```
 
 Local development uses its own client secret, generated the same way, and the
-same client id. Put them in `web/.dev.vars`, and do not commit that file:
+same client id. Put them in `apps/web/.dev.vars`, and do not commit that file:
 
 ```sh
 GITHUB_CLIENT_ID=the-client-id
@@ -101,13 +101,13 @@ GITHUB_CLIENT_SECRET=the-local-client-secret
 
 ## Attach the custom domain
 
-The `routes` entry in `web/wrangler.jsonc` attaches `music.rising.sh` as a
+The `routes` entry in `apps/web/wrangler.jsonc` attaches `music.rising.sh` as a
 Worker custom domain. Ensure `rising.sh` is active in the same Cloudflare
 account, then deploy from the repository root:
 
 ```sh
-npm --prefix web ci
-npm --prefix web run deploy
+npm --prefix apps/web ci
+npm --prefix apps/web run deploy
 ```
 
 Cloudflare creates the DNS record and certificate for the custom domain. Check
@@ -119,7 +119,7 @@ Routes**.
 Users sign in with GitHub and connect a source on the settings page. To add a
 public user by hand instead, run one command against the remote D1 database.
 `github_id` is an operator-supplied numeric identifier, `name` is the public URL
-name, and `created_at` is the current Unix timestamp. Run it from `web/`:
+name, and `created_at` is the current Unix timestamp. Run it from `apps/web/`:
 
 ```sh
 npx wrangler d1 execute music-stats --remote --command \
@@ -140,12 +140,13 @@ curl -i 'https://music.rising.sh/u/alice.json?period=week'
 
 Last.fm data is behind a launch gate: the cron does not pull it and the profile
 answers `404` until `LASTFM_APPROVAL` in
-[`web/wrangler.jsonc`](../web/wrangler.jsonc) is set. It stays empty until
-Last.fm approves the service in writing. Do not set it without that approval.
+[`apps/web/wrangler.jsonc`](../apps/web/wrangler.jsonc) is set. It stays empty
+until Last.fm approves the service in writing. Do not set it without that
+approval.
 
 Create a Last.fm API account at
 [https://www.last.fm/api/account/create](https://www.last.fm/api/account/create)
-and store its API key as a Worker secret, from `web/`:
+and store its API key as a Worker secret, from `apps/web/`:
 
 ```sh
 npx wrangler secret put LASTFM_API_KEY
@@ -176,8 +177,8 @@ npx wrangler d1 execute music-stats --remote --command \
   "INSERT INTO sources (user_id, kind) VALUES ((SELECT id FROM users WHERE name = 'alice'), 'ytmusic');"
 ```
 
-Run the token script from `web/` with the source's id. It prints the token once
-and the SQL that stores its hash:
+Run the token script from `apps/web/` with the source's id. It prints the token
+once and the SQL that stores its hash:
 
 ```sh
 node scripts/make-token.mjs 1
