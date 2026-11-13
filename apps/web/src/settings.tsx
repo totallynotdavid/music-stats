@@ -12,6 +12,8 @@ import {
   validName,
   type SignedInUser,
 } from "./auth";
+import { page } from "./layout";
+import { sourceNames } from "./names";
 import type { Env } from "./types";
 import { importPlays, importRemove } from "./import";
 
@@ -71,15 +73,6 @@ interface ExportRow {
 
 const sourceKinds = ["listenbrainz", "lastfm"] as const;
 
-const kindNames: Record<string, string> = {
-  listenbrainz: "ListenBrainz",
-  lastfm: "Last.fm",
-  spotify: "Spotify",
-  ytmusic: "YouTube Music",
-  spotify_import: "Spotify import",
-  ytmusic_import: "YouTube Music import",
-};
-
 const importSourceNames: Record<string, string> = {
   spotify_import: "spotify",
   ytmusic_import: "ytmusic",
@@ -106,43 +99,32 @@ function sourceNote(source: SourceInfo) {
   return null;
 }
 
-function shell(title: string, children: unknown) {
-  return (
-    <html lang="en">
-      <head>
-        <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="stylesheet" href="/styles.css" />
-        <title>{title} · music stats</title>
-      </head>
-      <body>
-        <main class="shell">{children}</main>
-      </body>
-    </html>
-  );
-}
-
 export function signInPage() {
-  return shell(
-    "Sign in",
-    <>
-      <span class="eyebrow">music stats</span>
-      <h1>Your listening, on record.</h1>
-      <p class="lede">
-        A public profile of every play you connect, at <code>/u/your-name</code>
-        .
-      </p>
-      <p class="lede">
-        Profiles are public: anyone can open your page and read your listening
-        history. You can hide yours later in settings.
-      </p>
-      <p>
-        <a class="button primary" href="/auth/github">
-          Sign in with GitHub
-        </a>
-      </p>
-    </>,
-  );
+  return page({
+    title: "Sign in",
+    children: (
+      <>
+        <div class="page-head">
+          <h1>Sign in</h1>
+          <p>
+            Music stats stores the plays you connect from ListenBrainz, Last.fm,
+            YouTube Music and Spotify. It shows your top tracks, top artists and
+            plays per day on a public page at <code>/u/name</code>.
+          </p>
+        </div>
+        <div class="stack">
+          <div>
+            <a class="button primary" href="/auth/github">
+              Sign in with GitHub
+            </a>
+          </div>
+          <p class="hint">
+            Profiles are public until you hide them in settings.
+          </p>
+        </div>
+      </>
+    ),
+  });
 }
 
 interface PageOptions {
@@ -161,13 +143,17 @@ function settingsPage(
   const { notice, error, field, issuedToken, lastFmApproved } = options;
   const fieldError = (name: string) =>
     field === name && error ? (
-      <p class="form-error" role="alert">
-        {error}
+      <p class="form-error" id={`${name}-error`} role="alert">
+        <b>Error:</b> {error}
       </p>
     ) : null;
+  const invalid = (name: string) =>
+    field === name && error
+      ? { "aria-invalid": "true", "aria-describedby": `${name}-error` }
+      : {};
   const topError = field === undefined && error !== undefined && (
     <p class="form-error" role="alert">
-      {error}
+      <b>Error:</b> {error}
     </p>
   );
   const pulledSources = sources.filter(
@@ -176,252 +162,283 @@ function settingsPage(
   const importedSources = sources.filter(
     (source) => source.kind in importSourceNames,
   );
-  return shell(
-    "Settings",
-    <>
-      <header class="page-head">
-        <div>
-          <span class="eyebrow">music stats</span>
-          <h1>Settings</h1>
-          <p class="lede">
-            Signed in as <b>{user.name}</b> ·{" "}
-            <a href={`/u/${encodeURIComponent(user.name)}`}>view profile</a>
-          </p>
-        </div>
+  return page({
+    title: "Settings",
+    account: (
+      <>
+        <a href={`/u/${encodeURIComponent(user.name)}`}>View profile</a>
         <form method="post" action="/settings/sign-out">
-          <button type="submit">Sign out</button>
-        </form>
-      </header>
-      {notice !== undefined && <p class="notice">{notice}</p>}
-      {topError}
-      {issuedToken !== undefined && (
-        <section class="notice" aria-label="New upload token">
-          <p>Your new upload token. It is shown once; store it now.</p>
-          <code class="token">{issuedToken}</code>
-        </section>
-      )}
-      <section class="panel">
-        <div class="panel-header">
-          <h2>Profile</h2>
-        </div>
-        <form method="post" action="/settings/profile">
-          <div class="field">
-            <label for="name">Profile name</label>
-            <input
-              id="name"
-              name="name"
-              type="text"
-              value={user.name}
-              minlength={1}
-              maxlength={39}
-              required
-              spellcheck={false}
-              autocomplete="off"
-            />
-            <small>
-              Lowercase letters, digits and hyphens, no hyphen at either end.
-              Your page lives at /u/&lt;name&gt;.
-            </small>
-            {fieldError("name")}
-          </div>
-          <label class="check" for="is_public">
-            <input
-              id="is_public"
-              name="is_public"
-              type="checkbox"
-              checked={user.is_public === 1}
-            />
-            <span>Public profile</span>
-          </label>
-          <small class="hint">
-            Hidden profiles answer 404 on the page, the JSON and the card.
-          </small>
-          <div>
-            <button class="primary" type="submit">
-              Save profile
-            </button>
-          </div>
-        </form>
-      </section>
-      <section class="panel">
-        <div class="panel-header">
-          <h2>Sources</h2>
-        </div>
-        {pulledSources.length === 0 ? (
-          <p class="empty">
-            No sources yet. Connect ListenBrainz or Last.fm to start recording.
-          </p>
-        ) : (
-          <ul class="rows">
-            {pulledSources.map((source) => (
-              <li key={source.id}>
-                <span class="track">
-                  <b>{kindNames[source.kind] ?? source.kind}</b>
-                  <small>
-                    {source.account ?? "upload token"} ·{" "}
-                    {sourceStatus(source, lastFmApproved)}
-                    {sourceNote(source) !== null && (
-                      <> · {sourceNote(source)}</>
-                    )}
-                  </small>
-                </span>
-                <form method="post" action="/settings/sources/remove">
-                  <input type="hidden" name="id" value={source.id} />
-                  <button type="submit">Remove</button>
-                </form>
-              </li>
-            ))}
-          </ul>
-        )}
-        <form method="post" action="/settings/sources" class="form-row">
-          <div class="field">
-            <label for="source-kind">Service</label>
-            <select id="source-kind" name="kind">
-              {sourceKinds.map((kind) => (
-                <option value={kind}>{kindNames[kind]}</option>
-              ))}
-            </select>
-          </div>
-          <div class="field">
-            <label for="source-account">Username</label>
-            <input
-              id="source-account"
-              name="account"
-              type="text"
-              required
-              spellcheck={false}
-              autocomplete="off"
-            />
-            {fieldError("source")}
-          </div>
-          <div class="field actions">
-            <button type="submit">Connect</button>
-          </div>
-        </form>
-        <small class="hint">
-          A source is claimed by name. The service reads the public ListenBrainz
-          or Last.fm history of that account.
-        </small>
-      </section>
-      <section class="panel">
-        <div class="panel-header">
-          <h2>YouTube Music uploads</h2>
-        </div>
-        {tokens.length === 0 ? (
-          <p class="empty">
-            No upload token yet. Issue one and put it in your GitHub Action's
-            secrets as UPLOAD_TOKEN.
-          </p>
-        ) : (
-          <ul class="rows">
-            {tokens.map((token) => (
-              <li key={token.id}>
-                <span class="track">
-                  <b>
-                    <code>…{token.hint}</code>
-                  </b>
-                  <small>
-                    created {dayText(token.created_at)} · last used{" "}
-                    {dayText(token.last_used_at)}
-                  </small>
-                </span>
-                <form method="post" action="/settings/tokens/revoke">
-                  <input type="hidden" name="id" value={token.id} />
-                  <button type="submit">Revoke</button>
-                </form>
-              </li>
-            ))}
-          </ul>
-        )}
-        <form method="post" action="/settings/tokens">
-          <button type="submit">Issue a new token</button>
-        </form>
-      </section>
-      <section class="panel">
-        <div class="panel-header">
-          <h2>Import history</h2>
-        </div>
-        <p class="empty">
-          Bring in Spotify's extended streaming history or the watch history of
-          a Google Takeout export. The browser reads the files and sends the
-          plays in small batches; the files never leave this device.
-        </p>
-        <div class="field">
-          <label for="import-files">History files</label>
-          <input id="import-files" type="file" accept=".json" multiple />
-          <small>
-            JSON files only; unzip the export first. A Spotify file is a
-            Streaming_History_Audio file, a Takeout file is watch-history.json.
-          </small>
-        </div>
-        <div>
-          <button id="import-start" type="button">
-            Start the import
+          <button class="link" type="submit">
+            Sign out
           </button>
+        </form>
+      </>
+    ),
+    children: (
+      <>
+        <div class="page-head">
+          <h1>Settings</h1>
+          <p class="meta">
+            Signed in as <b>{user.name}</b>.
+          </p>
         </div>
-        <p id="import-status" role="status"></p>
-        <ul class="rows" id="import-sources">
-          {importedSources.map((source) => (
-            <li key={source.id}>
-              <span class="track">
-                <b>{kindNames[source.kind] ?? source.kind}</b>
-                <small>last batch {dayText(source.last_ok_at)}</small>
-              </span>
-              <button
-                type="button"
-                data-import-remove={importSourceNames[source.kind]}
-              >
-                Remove
+        {notice !== undefined && <p class="notice">{notice}</p>}
+        {topError}
+        {issuedToken !== undefined && (
+          <section class="notice" aria-label="New upload token">
+            <p>Your new upload token. It is shown once. Store it now.</p>
+            <code class="token">{issuedToken}</code>
+          </section>
+        )}
+        <section class="section">
+          <div class="section-head">
+            <h2>Profile</h2>
+          </div>
+          <form class="section-body" method="post" action="/settings/profile">
+            <div class="field">
+              <label for="name">Profile name</label>
+              <small>
+                Lowercase letters, digits and hyphens, no hyphen at either end.
+                Your page is at /u/&lt;name&gt;.
+              </small>
+              {fieldError("name")}
+              <input
+                id="name"
+                name="name"
+                type="text"
+                value={user.name}
+                minlength={1}
+                maxlength={39}
+                required
+                spellcheck={false}
+                autocomplete="off"
+                {...invalid("name")}
+              />
+            </div>
+            <div>
+              <label class="check" for="is_public">
+                <input
+                  id="is_public"
+                  name="is_public"
+                  type="checkbox"
+                  checked={user.is_public === 1}
+                />
+                <span>Public profile</span>
+              </label>
+              <small class="hint">
+                A hidden profile returns 404 for the page, the JSON and the
+                card.
+              </small>
+            </div>
+            <div>
+              <button class="primary" type="submit">
+                Save profile
               </button>
-            </li>
-          ))}
-        </ul>
-        <script type="module" src="/import.js"></script>
-      </section>
-      <section class="panel">
-        <div class="panel-header">
-          <h2>Export</h2>
-        </div>
-        <p class="empty">
-          <a id="export-all" href="/settings/export" data-name={user.name}>
-            Download your plays
-          </a>{" "}
-          as NDJSON, one play per line. Without JavaScript the link returns the
-          first 1,000 plays; each page's Link header points at the next.
-        </p>
-        <script
-          type="module"
-          dangerouslySetInnerHTML={{ __html: exportScript }}
-        />
-      </section>
-      <section class="panel danger">
-        <div class="panel-header">
-          <h2>Delete account</h2>
-        </div>
-        <p class="empty">
-          Deletes every play, source, token and session of this account. There
-          is no undo.
-        </p>
-        <form method="post" action="/settings/delete">
-          <div class="field">
-            <label for="confirm">Type {user.name} to confirm</label>
-            <input
-              id="confirm"
-              name="confirm"
-              type="text"
-              required
-              spellcheck={false}
-              autocomplete="off"
-            />
-            {fieldError("confirm")}
+            </div>
+          </form>
+        </section>
+        <section class="section">
+          <div class="section-head">
+            <h2>Sources</h2>
           </div>
-          <button class="danger" type="submit">
-            Delete this account
-          </button>
-        </form>
-      </section>
-    </>,
-  );
+          <div class="section-body">
+            {pulledSources.length === 0 ? (
+              <p class="muted">
+                No sources connected. Add a ListenBrainz or Last.fm account
+                below.
+              </p>
+            ) : (
+              <ul class="rows">
+                {pulledSources.map((source) => (
+                  <li key={source.id}>
+                    <span class="track">
+                      <b>{sourceNames[source.kind] ?? source.kind}</b>
+                      <small>
+                        {source.account ?? "upload token"} ·{" "}
+                        {sourceStatus(source, lastFmApproved)}
+                        {sourceNote(source) !== null && (
+                          <> · {sourceNote(source)}</>
+                        )}
+                      </small>
+                    </span>
+                    <form method="post" action="/settings/sources/remove">
+                      <input type="hidden" name="id" value={source.id} />
+                      <button type="submit">Remove</button>
+                    </form>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <form method="post" action="/settings/sources" class="form-row">
+              <div class="field">
+                <label for="source-kind">Service</label>
+                <select id="source-kind" name="kind">
+                  {sourceKinds.map((kind) => (
+                    <option value={kind}>{sourceNames[kind]}</option>
+                  ))}
+                </select>
+              </div>
+              <div class="field">
+                <label for="source-account">Username</label>
+                {fieldError("source")}
+                <input
+                  id="source-account"
+                  name="account"
+                  type="text"
+                  required
+                  spellcheck={false}
+                  autocomplete="off"
+                  {...invalid("source")}
+                />
+              </div>
+              <div class="field actions">
+                <button type="submit">Connect source</button>
+              </div>
+            </form>
+            <small class="hint">
+              The service reads the public ListenBrainz or Last.fm history of
+              the account you name.
+            </small>
+          </div>
+        </section>
+        <section class="section">
+          <div class="section-head">
+            <h2>YouTube Music uploads</h2>
+          </div>
+          <div class="section-body">
+            {tokens.length === 0 ? (
+              <p class="muted">
+                No upload token. Issue one and store it as UPLOAD_TOKEN in your
+                GitHub Action's secrets.
+              </p>
+            ) : (
+              <ul class="rows">
+                {tokens.map((token) => (
+                  <li key={token.id}>
+                    <span class="track">
+                      <b>
+                        <code>…{token.hint}</code>
+                      </b>
+                      <small>
+                        created {dayText(token.created_at)} · last used{" "}
+                        {dayText(token.last_used_at)}
+                      </small>
+                    </span>
+                    <form method="post" action="/settings/tokens/revoke">
+                      <input type="hidden" name="id" value={token.id} />
+                      <button type="submit">Revoke</button>
+                    </form>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <form method="post" action="/settings/tokens">
+              <button type="submit">Issue a new token</button>
+            </form>
+          </div>
+        </section>
+        <section class="section">
+          <div class="section-head">
+            <h2>Import history</h2>
+          </div>
+          <div class="section-body">
+            <p class="muted">
+              Import Spotify extended streaming history or the watch history of
+              a Google Takeout export. The browser reads the files and sends the
+              plays in small batches. The files stay on this device.
+            </p>
+            <div class="field">
+              <label for="import-files">History files</label>
+              <small>
+                JSON files only. Unzip the export first. A Spotify file is a
+                Streaming_History_Audio file. A Takeout file is
+                watch-history.json.
+              </small>
+              <input id="import-files" type="file" accept=".json" multiple />
+            </div>
+            <div>
+              <button id="import-start" type="button">
+                Start the import
+              </button>
+            </div>
+            <p id="import-status" role="status"></p>
+            <ul class="rows" id="import-sources">
+              {importedSources.map((source) => (
+                <li key={source.id}>
+                  <span class="track">
+                    <b>{sourceNames[source.kind] ?? source.kind}</b>
+                    <small>last batch {dayText(source.last_ok_at)}</small>
+                  </span>
+                  <button
+                    type="button"
+                    data-import-remove={importSourceNames[source.kind]}
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <script type="module" src="/import.js"></script>
+          </div>
+        </section>
+        <section class="section">
+          <div class="section-head">
+            <h2>Export</h2>
+          </div>
+          <div class="section-body">
+            <p class="muted">
+              Download your plays as NDJSON, one play per line. Without
+              JavaScript the link returns the first 1,000 plays. The Link header
+              of each page points at the next.
+            </p>
+            <div>
+              <a
+                class="button"
+                id="export-all"
+                href="/settings/export"
+                data-name={user.name}
+              >
+                Download your plays
+              </a>
+            </div>
+            <script
+              type="module"
+              dangerouslySetInnerHTML={{ __html: exportScript }}
+            />
+          </div>
+        </section>
+        <section class="section">
+          <div class="section-head">
+            <h2>Delete account</h2>
+          </div>
+          <form class="section-body" method="post" action="/settings/delete">
+            <p class="muted">
+              Deletes every play, source, token and session of this account.
+              There is no undo.
+            </p>
+            <div class="field">
+              <label for="confirm">Type {user.name} to confirm</label>
+              {fieldError("confirm")}
+              <input
+                id="confirm"
+                name="confirm"
+                type="text"
+                required
+                spellcheck={false}
+                autocomplete="off"
+                {...invalid("confirm")}
+              />
+            </div>
+            <div>
+              <button class="danger" type="submit">
+                Delete account
+              </button>
+            </div>
+          </form>
+        </section>
+      </>
+    ),
+  });
 }
 
 function recountStatements(db: D1Database, userId: number) {
@@ -640,7 +657,7 @@ settingsApp.post("/sources", async (context) => {
       context,
       data,
       {
-        error: `A ${kindNames[kind]} source is already connected.`,
+        error: `A ${sourceNames[kind]} source is already connected.`,
         field: "source",
       },
       400,

@@ -5,6 +5,8 @@ import { getStats } from "./aggregate";
 import { beginGithub, githubCallback, sessionUser } from "./auth";
 import { renderCard, type CardTheme } from "./card";
 import { pullDueSources } from "./cron";
+import { page } from "./layout";
+import { sourceNames } from "./names";
 import { settingsApp, signInPage } from "./settings";
 import { uploadPlays } from "./upload";
 
@@ -35,11 +37,19 @@ async function findUser(db: D1Database, name: string) {
       `SELECT id, name,
        EXISTS (
          SELECT 1 FROM sources WHERE user_id = users.id AND kind = 'lastfm'
-       ) AS has_lastfm
+       ) AS has_lastfm,
+       (
+         SELECT group_concat(kind) FROM sources WHERE user_id = users.id
+       ) AS kinds
        FROM users WHERE name = ?1 COLLATE NOCASE AND is_public = 1`,
     )
     .bind(name)
-    .first<{ id: number; name: string; has_lastfm: number }>();
+    .first<{
+      id: number;
+      name: string;
+      has_lastfm: number;
+      kinds: string | null;
+    }>();
 }
 
 async function getSnapshot(
@@ -71,9 +81,16 @@ async function getSnapshot(
   return snapshot;
 }
 
+const periodNames: Record<Period, string> = {
+  week: "Week",
+  month: "Month",
+  all: "All time",
+};
+
+const dailyBars = 30;
+
 function list(items: Array<{ title: string; artist: string; plays: number }>) {
-  if (items.length === 0)
-    return <p class="empty">No listening history in this period.</p>;
+  if (items.length === 0) return <p class="muted">No plays in this period.</p>;
   return (
     <ol>
       {items.map((item, index) => (
@@ -81,7 +98,7 @@ function list(items: Array<{ title: string; artist: string; plays: number }>) {
           <span class="rank">{index + 1}</span>
           <span class="track">
             <b>{item.title}</b>
-            <small>{item.artist}</small>
+            {item.artist !== "" && <small>{item.artist}</small>}
           </span>
           <span class="count">{item.plays}</span>
         </li>
@@ -90,122 +107,151 @@ function list(items: Array<{ title: string; artist: string; plays: number }>) {
   );
 }
 
+function sourceLine(kinds: string | null) {
+  const names = new Set(
+    (kinds?.split(",") ?? []).map((kind) => sourceNames[kind] ?? kind),
+  );
+  return names.size === 0 ? "None" : [...names].sort().join(", ");
+}
+
 function profilePage(
   snapshot: PeriodStats,
   origin: string,
+  kinds: string | null,
   lastFmCredit: boolean,
 ) {
-  const maxDaily = Math.max(1, ...snapshot.daily.map((day) => day.plays));
+  const days = snapshot.daily.slice(-dailyBars);
+  const maxDaily = Math.max(1, ...days.map((day) => day.plays));
   const cardUrl = `${origin}/u/${encodeURIComponent(snapshot.user.name)}.svg`;
-  return (
-    <html lang="en">
-      <head>
-        <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+  const updated = new Date(snapshot.updated_at * 1000)
+    .toISOString()
+    .slice(0, 16)
+    .replace("T", " ");
+  const periodNote = periodNames[snapshot.period];
+  return page({
+    title: snapshot.user.name,
+    head: (
+      <>
         <meta
           property="og:title"
           content={`${snapshot.user.name}'s listening profile`}
         />
         <meta property="og:image" content={cardUrl} />
-        <link rel="stylesheet" href="/styles.css" />
-        <title>{snapshot.user.name} · music stats</title>
-      </head>
-      <body>
-        <main class="shell">
-          <span class="eyebrow">music stats</span>
+      </>
+    ),
+    account: <a href="/settings">Account</a>,
+    footer: (
+      <>
+        <a
+          href={`/u/${encodeURIComponent(snapshot.user.name)}.json?period=${snapshot.period}`}
+        >
+          Data as JSON
+        </a>
+        {lastFmCredit && (
+          <>
+            {" "}
+            <a href="https://www.last.fm">powered by AudioScrobbler</a>
+          </>
+        )}
+      </>
+    ),
+    children: (
+      <>
+        <div class="page-head">
           <h1>{snapshot.user.name}</h1>
-          <p class="lede">A record of the music this listener played.</p>
-          <nav class="periods" aria-label="Time period">
-            {periods.map((period) => (
-              <a
-                href={`?period=${period}`}
-                aria-current={snapshot.period === period ? "page" : undefined}
-              >
-                {period}
-              </a>
-            ))}
-          </nav>
-          <section class="stats" aria-label="Summary">
-            <div class="stat">
-              <strong>{snapshot.plays}</strong>
-              <span>plays</span>
-            </div>
-            <div class="stat">
-              <strong>{snapshot.unique_tracks}</strong>
-              <span>tracks</span>
-            </div>
-            <div class="stat">
-              <strong>{snapshot.unique_artists}</strong>
-              <span>artists</span>
-            </div>
-          </section>
-          <div class="grid">
-            <section class="panel">
-              <div class="panel-header">
-                <h2>Top tracks</h2>
-                <small>{snapshot.period}</small>
-              </div>
-              {list(snapshot.top_tracks)}
-            </section>
-            <section class="panel">
-              <div class="panel-header">
-                <h2>Top artists</h2>
-                <small>{snapshot.period}</small>
-              </div>
-              {list(
-                snapshot.top_artists.map((item) => ({
-                  title: item.artist,
-                  artist: "",
-                  plays: item.plays,
-                })),
-              )}
-            </section>
-            <section class="panel">
-              <div class="panel-header">
-                <h2>Plays per day</h2>
-                <small>UTC</small>
-              </div>
-              {snapshot.daily.length === 0 ? (
-                <p class="empty">No listening history in this period.</p>
-              ) : (
-                <div class="daily">
-                  {snapshot.daily.map((day) => (
-                    <div class="day" key={day.day}>
-                      <span
-                        class="bar"
-                        style={`height: ${(day.plays / maxDaily) * 100}%`}
-                        title={`${day.plays} plays`}
-                      />
-                      <small>{day.day.slice(5)}</small>
-                    </div>
+          <p class="meta">
+            Sources: {sourceLine(kinds)}. Updated{" "}
+            <time datetime={new Date(snapshot.updated_at * 1000).toISOString()}>
+              {updated} UTC
+            </time>
+            .
+          </p>
+        </div>
+        <nav class="segmented" aria-label="Time period">
+          {periods.map((period) => (
+            <a
+              href={`?period=${period}`}
+              aria-current={snapshot.period === period ? "page" : undefined}
+            >
+              {periodNames[period]}
+            </a>
+          ))}
+        </nav>
+        <dl class="stats">
+          <div>
+            <dt>Plays</dt>
+            <dd>{snapshot.plays}</dd>
+          </div>
+          <div>
+            <dt>Tracks</dt>
+            <dd>{snapshot.unique_tracks}</dd>
+          </div>
+          <div>
+            <dt>Artists</dt>
+            <dd>{snapshot.unique_artists}</dd>
+          </div>
+        </dl>
+        <section class="section">
+          <div class="section-head">
+            <h2>Top tracks</h2>
+            <small>{periodNote}</small>
+          </div>
+          <div class="section-body">{list(snapshot.top_tracks)}</div>
+        </section>
+        <section class="section">
+          <div class="section-head">
+            <h2>Top artists</h2>
+            <small>{periodNote}</small>
+          </div>
+          <div class="section-body">
+            {list(
+              snapshot.top_artists.map((item) => ({
+                title: item.artist,
+                artist: "",
+                plays: item.plays,
+              })),
+            )}
+          </div>
+        </section>
+        <section class="section">
+          <div class="section-head">
+            <h2>Plays per day</h2>
+            <small>
+              {snapshot.daily.length > dailyBars
+                ? `Latest ${dailyBars} days with plays, UTC`
+                : "Days with plays, UTC"}
+            </small>
+          </div>
+          <div class="section-body">
+            {days.length === 0 ? (
+              <p class="muted">No plays in this period.</p>
+            ) : (
+              <>
+                <div
+                  class="daily"
+                  role="img"
+                  aria-label={`Plays per day from ${days[0]!.day} to ${days[days.length - 1]!.day}, at most ${maxDaily} a day`}
+                >
+                  {days.map((day) => (
+                    <span
+                      class="bar"
+                      key={day.day}
+                      style={`height: ${(day.plays / maxDaily) * 100}%`}
+                      title={`${day.day}: ${day.plays} plays`}
+                    />
                   ))}
                 </div>
-              )}
-            </section>
-          </div>
-          <footer>
-            Updated{" "}
-            {new Date(snapshot.updated_at * 1000)
-              .toISOString()
-              .slice(0, 16)
-              .replace("T", " ")}{" "}
-            UTC ·{" "}
-            <a
-              href={`/u/${encodeURIComponent(snapshot.user.name)}.json?period=${snapshot.period}`}
-            >
-              JSON
-            </a>
-            {lastFmCredit && (
-              <>
-                {" "}
-                · <a href="https://www.last.fm">powered by AudioScrobbler</a>
+                <div class="axis">
+                  <span>{days[0]!.day}</span>
+                  <span>{days[days.length - 1]!.day}</span>
+                </div>
               </>
             )}
-          </footer>
-        </main>
-      </body>
-    </html>
-  );
+          </div>
+        </section>
+      </>
+    ),
+  });
 }
 
 export const app = new Hono<{ Bindings: Env }>();
@@ -278,7 +324,12 @@ app.get("/u/:path", async (context) => {
   if (format === "html") {
     if (lastFm) context.header("Cache-Control", "public, max-age=60");
     return context.html(
-      profilePage(snapshot, new URL(context.req.url).origin, lastFm),
+      profilePage(
+        snapshot,
+        new URL(context.req.url).origin,
+        user.kinds,
+        lastFm,
+      ),
     );
   }
   context.header(
