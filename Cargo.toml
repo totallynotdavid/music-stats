@@ -1,30 +1,14 @@
-[package]
-name = "music-stats"
-version = "0.4.0"
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
 edition = "2024"
 authors = ["David Duran <dadch1404@gmail.com>"]
-description = "Saves your music listening history to a GitHub Gist and aggregates plays from Last.fm and YouTube Music."
-keywords = ["music", "lastfm", "youtube", "spotify", "cli"]
 license = "MIT"
+license-file = "LICENSE"
 repository = "https://github.com/totallynotdavid/music-stats"
 homepage = "https://github.com/totallynotdavid/music-stats"
-documentation = "https://docs.rs/music-stats"
-readme = "readme.md"
-include = ["src/**", "Cargo.toml", "readme.md", "LICENSE"]
-
-[dependencies]
-chrono = "0.4.45"
-chrono-tz = "0.10.4"
-dotenvy = "0.15.7"
-regex = "1.13.1"
-reqwest = { version = "0.13.5", features = ["json"] }
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-sha1 = "0.11.0"
-tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "time"] }
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-unicode-width = "0.2.3"
 
 [profile.release]
 opt-level = 3
@@ -32,7 +16,3 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
-
-[dev-dependencies]
-tracing-test = { version = "0.2.6", features = ["no-env-filter"] }
-wiremock = "0.6.5"

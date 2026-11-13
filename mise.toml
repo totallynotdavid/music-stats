@@ -61,5 +61,5 @@ description = "Package the crate and build it from the package, without uploadin
 run = "cargo publish --dry-run --locked"
 
 [tasks.fetch-fixtures]
-description = "Refresh tests/fixtures from the live Last.fm and YouTube Music services"
+description = "Refresh crates/music-stats/tests/fixtures from the live Last.fm and YouTube Music services"
 run = "./scripts/fetch-fixtures.sh"

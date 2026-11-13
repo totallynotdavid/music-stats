@@ -8,8 +8,9 @@ set -euo pipefail
 tag="${1:-}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-name="$(sed -n '/^\[package\]/,/^\[/{s/^name = "\(.*\)"$/\1/p;}' "$root/Cargo.toml")"
-version="$(sed -n '/^\[package\]/,/^\[/{s/^version = "\(.*\)"$/\1/p;}' "$root/Cargo.toml")"
+manifest="$root/crates/music-stats/Cargo.toml"
+name="$(sed -n '/^\[package\]/,/^\[/{s/^name = "\(.*\)"$/\1/p;}' "$manifest")"
+version="$(sed -n '/^\[package\]/,/^\[/{s/^version = "\(.*\)"$/\1/p;}' "$manifest")"
 
 if [ -n "$tag" ] && [ "$tag" != "v$version" ]; then
   echo "error: tag $tag does not match Cargo.toml version $version" >&2

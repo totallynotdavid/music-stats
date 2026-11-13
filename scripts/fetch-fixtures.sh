@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-FIXTURES_DIR="tests/fixtures"
+FIXTURES_DIR="crates/music-stats/tests/fixtures"
 
 mkdir -p "$FIXTURES_DIR"
 
