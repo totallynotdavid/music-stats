@@ -3,12 +3,12 @@
 A Worker that splits one ListenBrainz pull into its stages, one route per stage,
 so `wrangler tail` shows the `cpuTime` of a single stage on the deployed
 platform. It deploys to workers.dev only and binds the same D1 database and KV
-namespace as `web/wrangler.jsonc`.
+namespace as `apps/web/wrangler.jsonc`.
 
 ## Deploy
 
 ```sh
-cd web/bench
+cd apps/web/bench
 npx wrangler deploy
 ```
 
@@ -69,9 +69,9 @@ tail is the figure to compare across routes.
 | `/dups-delete`    | Deletes the `_dups` user's rows                    | -        | -                  |
 | `/reset`          | Deletes the bench user's rows                      | -        | -                  |
 
-The page is the first 200 listens of `web/test/fixtures/listens-rob.json`, the
-same recording `web/test/bench.test.ts` uses. The Last.fm local figures come
-from the same bench (`PULL_BENCH=1 npx vitest run bench`): about 1 ms of
+The page is the first 200 listens of `apps/web/test/fixtures/listens-rob.json`,
+the same recording `apps/web/test/bench.test.ts` uses. The Last.fm local figures
+come from the same bench (`PULL_BENCH=1 npx vitest run bench`): about 1 ms of
 JavaScript per stage and 8 to 12 ms through local D1 for the pull and store.
 Local figures are medians on this host: `/json`, `/parse` and `/resolve`
 measured in Bun; `/store`, `/pull` and `/pull-live` measured through
@@ -113,8 +113,8 @@ not yet measured.
 The bench runs as its own user (`id` -1, name `_bench`, which no GitHub login
 can take) with a ListenBrainz source (`id` -1, account `rob`) and a Last.fm
 source (`id` -2, account `fixture`). The Last.fm page is the 200 dated tracks of
-`web/test/fixtures/recenttracks.ts`; its pull routes pass a placeholder API key
-because the fixture fetcher never reaches Last.fm. The store and pull routes
+`apps/web/test/fixtures/recenttracks.ts`; its pull routes pass a placeholder API
+key because the fixture fetcher never reaches Last.fm. The store and pull routes
 create those rows when missing (one `INSERT OR IGNORE` batch), and the pull
 routes then park the source (`UPDATE sources SET next_pull_at = NULL`) once the
 runs finish: a pull writes `next_pull_at`, and a due bench source would be

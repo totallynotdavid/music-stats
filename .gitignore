@@ -11,5 +11,5 @@
 /lcov.info
 
 # web dependencies and local Wrangler state
-/web/node_modules
-/web/**/.wrangler
+/apps/web/node_modules
+/apps/web/**/.wrangler

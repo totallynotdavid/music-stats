@@ -3,12 +3,12 @@ name: web
 on:
   pull_request:
     paths:
-      - "web/**"
+      - "apps/web/**"
       - "mise.toml"
       - ".github/workflows/web.yml"
   push:
     branches: [master]
-    paths: ["web/**"]
+    paths: ["apps/web/**"]
 
 permissions:
   contents: read
@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: web
+        working-directory: apps/web
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: web
+        working-directory: apps/web
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
