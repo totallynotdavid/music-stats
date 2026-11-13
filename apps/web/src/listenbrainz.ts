@@ -67,7 +67,8 @@ async function fetchPage(
   };
 }
 
-export const maxListensPerPull = 200;
+// ListenBrainz's maximum `count` for a listens request.
+export const maxListensPerPull = 1000;
 
 export function listenInputs(
   listens: Listen[],

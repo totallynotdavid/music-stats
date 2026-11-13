@@ -23,6 +23,27 @@ import lastFmFixture from "../test/fixtures/recenttracks";
 const page = { payload: { listens: fixture.payload.listens.slice(0, 200) } };
 const pageText = JSON.stringify(page);
 const pageListens = page.payload.listens as Listen[];
+const fixtureListens = fixture.payload.listens as Listen[];
+const fixtureSpan =
+  fixtureListens[0].listened_at -
+  fixtureListens[fixtureListens.length - 1].listened_at +
+  1;
+
+// A page of `n` listens: the fixture repeated, each copy older than the last,
+// so a page larger than the recording still holds `n` distinct plays.
+function listensOf(n: number): Listen[] {
+  if (n === pageListens.length) return pageListens;
+  return Array.from({ length: n }, (_, i) => {
+    const listen = fixtureListens[i % fixtureListens.length];
+    const copy = Math.floor(i / fixtureListens.length);
+    return { ...listen, listened_at: listen.listened_at - copy * fixtureSpan };
+  });
+}
+
+function sizeOf(url: URL) {
+  const n = Number(url.searchParams.get("n") ?? pageListens.length);
+  return Math.min(Math.max(Math.floor(n) || 1, 1), 1000);
+}
 const pageTracks = lastFmFixture.recenttracks.track
   .filter((track) => "date" in track)
   .slice(0, 200) as LastFmTrack[];
@@ -131,17 +152,17 @@ const shiftedFetcher =
   };
 
 const fixtureFetcher =
-  (run: number): ListenFetcher =>
+  (run: number, listens: Listen[]): ListenFetcher =>
   async (url) => {
     const params = new URL(url).searchParams;
     if (params.has("max_ts")) {
       return { status: 200, body: { payload: { listens: [] } } };
     }
-    const count = Number(params.get("count")) || pageListens.length;
+    const count = Number(params.get("count")) || listens.length;
     return {
       status: 200,
       body: {
-        payload: { listens: shiftListens(pageListens.slice(0, count), run) },
+        payload: { listens: shiftListens(listens.slice(0, count), run) },
       },
       remaining: 29,
       resetIn: 30,
@@ -305,7 +326,11 @@ export default {
           ),
         );
       case "/resolve": {
-        const inputs = listenInputs(pageListens, benchUserId, benchSourceId);
+        const inputs = listenInputs(
+          listensOf(sizeOf(url)),
+          benchUserId,
+          benchSourceId,
+        );
         return report(
           "/resolve",
           await run(() => resolvePageTracks(inputs, new Map(), []), repeat),
@@ -334,7 +359,7 @@ export default {
               storeListensPage(
                 env.DB,
                 benchSource,
-                shiftListens(pageListens, run),
+                shiftListens(listensOf(sizeOf(url)), run),
               ),
             repeat,
           ),
@@ -360,7 +385,11 @@ export default {
             "/pull",
             await run(
               (run) =>
-                pullListenBrainz(env, { ...benchSource }, fixtureFetcher(run)),
+                pullListenBrainz(
+                  env,
+                  { ...benchSource },
+                  fixtureFetcher(run, listensOf(sizeOf(url))),
+                ),
               repeat,
             ),
           );

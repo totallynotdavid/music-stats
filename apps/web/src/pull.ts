@@ -1,8 +1,9 @@
 import { markDuplicates } from "./duplicates";
 import type { Env, SourceRow } from "./types";
 
-export const maxSourcesPerPull = 1;
-export const maxBackfillRowsPerDay = 50_000;
+export const maxSourcesPerPull = 10;
+// 30 million rows a month at most, out of Workers Paid's 50 million included.
+export const maxBackfillRowsPerDay = 1_000_000;
 export const nextTickDelay = 60;
 const backfillRowsKey = "backfill-rows";
 
