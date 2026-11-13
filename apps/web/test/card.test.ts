@@ -151,8 +151,8 @@ describe("card", () => {
       .replace("T", " ");
     expect(card).toContain(`${json.plays} plays`);
     expect(card).toContain(`Updated ${updated} UTC`);
-    expect(profile).toContain(`<strong>${json.plays}</strong>`);
-    expect(profile).toContain(`Updated ${updated} UTC`);
+    expect(profile).toContain(`<dd>${json.plays}</dd>`);
+    expect(profile).toContain(`>${updated} UTC</time>`);
     expect(profile).toContain("u/alice.svg");
     const secondCard = await (await fetchCard("?period=month&n=2")).text();
     expect(secondCard).toContain(`Updated ${updated} UTC`);

@@ -533,6 +533,23 @@ describe("profile API", () => {
     ).toBe(404);
   });
 
+  it("renders the profile page with its sources and update time", async () => {
+    await seedUser();
+    await env.DB.prepare(
+      "INSERT INTO sources (id, user_id, kind) VALUES (11, 1, 'ytmusic'), (12, 1, 'ytmusic_import')",
+    ).run();
+    const response = await SELF.fetch("https://music.rising.sh/u/alice");
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain("<h1>alice</h1>");
+    expect(html).toContain(
+      "Sources: ListenBrainz, YouTube Music, YouTube Music import.",
+    );
+    expect(html).toMatch(/Updated\s*<time datetime="[^"]+">[\d-]+ [\d:]+ UTC/);
+    expect(html).toContain('aria-current="page"');
+    expect(html).not.toContain("AudioScrobbler");
+  });
+
   it("pins the snapshot JSON for a fixed set of plays", async () => {
     const pinnedNow = 1_700_000_000;
     await seedUser();
