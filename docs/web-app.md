@@ -363,11 +363,12 @@ Content-Type: application/json
   pass silently.
 - **Limits.** The body is at most 256 KiB, `plays` at most 1,000 items, and the
   `Content-Type` must be `application/json`. The Worker refuses
-  `Content-Encoding`, because decompression costs CPU time that the Free plan
-  does not have. ListenBrainz sets the same count (1,000 listens per request).
-  The page holds about 200 plays, so a normal body is under 40 KiB. The crate
-  sends the newest 1,000 plays of a longer page in one request. Several requests
-  would read as several unrelated pages, and the older ones would count again.
+  `Content-Encoding`: a full body fits the limit uncompressed, so decompression
+  would only add CPU time. ListenBrainz sets the same count (1,000 listens per
+  request). The page holds about 200 plays, so a normal body is under 40 KiB.
+  The crate sends the newest 1,000 plays of a longer page in one request.
+  Several requests would read as several unrelated pages, and the older ones
+  would count again.
 - **Rate.** One upload per source every 30 seconds. The Worker reads
   `sources.last_ok_at` while it authenticates, so the check costs no extra
   query. A faster request gets `429` with `Retry-After`. A replayed page still
@@ -623,12 +624,13 @@ skipped with the rule that dropped each one.
 
 #### From the file to D1
 
-The Worker cannot read a file. A 100,000-play Spotify history is about 63 MB
+The Worker does not read the file. A 100,000-play Spotify history is about 63 MB
 (about 630 bytes a record in a public sample) and a Takeout history about 35 MB
-(about 350 bytes a record), while section 6 measures 0 to 7 ms of CPU to parse
-one 200-listen page, and the Free plan allows 10 ms. The cron cannot drain a
-staged copy either: a pull tick already measures 16 to 24 ms of CPU. So the
-browser does the parsing, and the Worker sees only the plays it keeps.
+(about 350 bytes a record). A Worker isolate has 128 MB of memory
+([limits](https://developers.cloudflare.com/workers/platform/limits/)), and the
+parsed objects of a 63 MB file take several times the text's size. Staging the
+file for the cron would need a store for it and a cursor into it. So the browser
+does the parsing, and the Worker sees only the plays it keeps.
 
 `apps/web/public/import-parse.js` holds the two keep rules as pure functions,
 and `apps/web/public/import.js` holds the page: it reads one file at a time with
@@ -656,7 +658,7 @@ Content-Type: application/json
   "inserted": 97,
   "duplicate": 3,
   "used": 41210,
-  "limit": 50000
+  "limit": 1000000
 }
 ```
 
@@ -664,17 +666,18 @@ Content-Type: application/json
   [section 5](#5-accounts-and-deletion). The route sits in `settingsApp`, which
   already makes both checks.
 - **Body.** `source` is `spotify` or `ytmusic`. `plays` holds 1 to
-  `importBatchSize` (100) items. `at` is an integer between 2005-01-01 and
+  `importBatchSize` (1,000) items. `at` is an integer between 2005-01-01 and
   tomorrow. `id` is 22 characters from `A-Za-z0-9` for `spotify`, and 1 to 32
   from `A-Za-z0-9_-` for `ytmusic`. `artist` and `title` hold 1 to 512
-  characters, and the page cuts a longer text. The body is at most 64 KiB, and
+  characters, and the page cuts a longer text. The body is at most 1 MiB, and
   the `Content-Type` must be `application/json`. A body that fails gets `422`
-  with the item indexes and nothing is stored.
-- **Batch size.** 100 plays. [Section 6](#6-limits-and-costs) records 9 ms of
-  CPU for an upload of 200 plays on new tracks, and the Free limit is 10 ms. A
-  batch of 100 leaves room for the source upsert and the marking. Milestone 8
-  measures the batch on the deployed Worker and lowers the constant if it takes
-  more than 8 ms.
+  with the item indexes and nothing is stored. A typical play is about 100 bytes
+  of JSON, so 1,000 plays fit the limit with room for long titles.
+- **Batch size.** 1,000 plays, the size of a push page. The bench stores a
+  1,000-listen page at 5 to 8 ms of deployed CPU
+  ([section 6](#6-limits-and-costs)), well under the 30 s of Workers Paid. A
+  larger batch would cut the number of requests further but would hold more rows
+  in one D1 batch, and a failed batch would resend more.
 - **Steps.** (1) Read the tally `backfill-rows`. At the limit the answer is
   `429` with `Retry-After` set to the seconds left to 00:00 UTC, and nothing is
   stored. (2) Upsert the user's import source, `spotify_import` or
@@ -682,7 +685,7 @@ Content-Type: application/json
   `spotify` or `ytmusic`. (4) `markDuplicates` over the span of the batch. (5)
   Add the rows written by steps 3 and 4 to the tally. The check happens before
   the write, so a batch that starts under the limit can end up to one batch over
-  it, about 1,200 rows.
+  it, about 12,000 rows.
 - **Retry.** A failed batch is sent again. The plays are ignored the second time
   and the marking repeats over the same span, so a failure between steps 3 and 4
   leaves no unmarked play after the retry.
@@ -695,17 +698,15 @@ place of `''`. Nothing else in the store path changes.
 one row more a play than the statements alone write for a stored play
 ([section 6](#6-limits-and-costs)). A stored play costs more than it did before
 migration 0005, whose `plays_source` index adds a row to every play write. A
-batch is about 800 rows, or 1,200 when every track is new. The imports share the
-50,000-row `backfill-rows` tally with the history walks, so a day admits 41 to
-62 batches. A history of 100,000 plays in which one play in five is on a new
-track writes 100,000 × 8 + 20,000 × 4 = 880,000 rows. That is about 55 batches a
-day for 18 days, 1,000 batches in all. All new tracks give 1,200,000 rows and 24
-days, and all known tracks 800,000 rows and 16 days. The plays that
-`markDuplicates` flags add the rows of its updates. While an import runs,
-history walks wait for the same tally and pulls of new plays and uploads carry
-on. The tally belongs to the account, not to a user, so on the Free plan all
-users share roughly 6,000 imported plays a day. The Paid plan lets the operator
-raise `maxBackfillRowsPerDay`.
+batch is about 8,000 rows, or 12,000 when every track is new. The imports share
+the `maxBackfillRowsPerDay` (1,000,000) `backfill-rows` tally with the history
+walks, so a day admits 83 to 125 batches. A history of 100,000 plays in which
+one play in five is on a new track writes 100,000 × 8 + 20,000 × 4 = 880,000
+rows, 100 batches on one day. All new tracks give 1,200,000 rows and two days.
+The plays that `markDuplicates` flags add the rows of its updates. While an
+import runs, history walks wait for the same tally and pulls of new plays and
+uploads carry on. The tally belongs to the account, not to a user, so all users
+share roughly 100,000 imported plays a day.
 
 When the page gets `429` it stops and says that the limit is reached and when it
 resets. The user selects the same files on a later day. The page keeps in
@@ -758,8 +759,9 @@ two kinds to its rank list.
 #### Removing an import
 
 Section 5 removes a source in one batch, which deletes its plays and recounts
-the user's three totals tables. For 100,000 plays that is more than the 100,000
-rows a day of the Free plan. An import is removed in chunks instead:
+the user's three totals tables. For 100,000 plays that one request would write
+hundreds of thousands of rows outside the backfill tally. An import is removed
+in chunks instead, and each chunk passes the tally like an import batch:
 
 ```http
 POST /settings/import/remove
@@ -937,9 +939,10 @@ only ever sets `dup` to 1, so the mis-ordered chain above keeps its count of 1.
 ## Pulled sources
 
 A Cron Trigger runs every minute and calls `scheduled()`. It selects the due
-source whose `next_pull_at` has passed, oldest first, through `sources_due`, and
-pulls it, one source a tick. [Limits and costs](#6-limits-and-costs) records
-what a tick costs against the Free plan's
+sources whose `next_pull_at` has passed, oldest first, through `sources_due`,
+and pulls up to `maxSourcesPerPull` (10) of them, one after the other.
+[Limits and costs](#6-limits-and-costs) records what a tick costs against the
+Workers Paid
 [limits](https://developers.cloudflare.com/workers/platform/limits/).
 
 - **Last.fm.** `user.getrecenttracks` with `limit=200` and `from=cursor+1`
@@ -953,14 +956,14 @@ what a tick costs against the Free plan's
   own rate limits and may change them (clause 4.4 of its terms). The cron pulls
   it only when `LASTFM_APPROVAL` is set.
 - **ListenBrainz.** `GET /1/user/NAME/listens` with `min_ts=cursor` and
-  `count=200`, and `max_ts` for the backfill, since one call takes only one of
-  the two
+  `count=1000`, the API's maximum (`maxListensPerPull`), and `max_ts` for the
+  backfill, since one call takes only one of the two
   ([API](https://listenbrainz.readthedocs.io/en/latest/users/api/core.html)).
   `listened_at` is the playback start. Milestone 1 confirms that a public user's
   listens need no token. One pull takes up to two calls: the current page, then
-  a walk page for what is left of the 200-listen budget. A page that comes back
-  full means more waits, so the source is due again at the next tick. The API
-  returns the newest `count` listens at or after `min_ts`, so a full current
+  a walk page for what is left of the 1,000-listen budget. A page that comes
+  back full means more waits, so the source is due again at the next tick. The
+  API returns the newest `count` listens at or after `min_ts`, so a full current
   page skips the listens between the old cursor and the page's oldest. That
   range is the gap: `gap_floor` holds the old cursor and `gap_before` the walk's
   upper bound, and the walk drains the gap first, stopping when a page's oldest
@@ -984,16 +987,17 @@ what a tick costs against the Free plan's
   and retries with the same back-off. The dashboard shows the message. A Last.fm
   user who hides recent listening gets an error that says so. An expired or
   revoked Spotify token also shows there.
-- **Backfill write cap.** History walks across the account write at most 50,000
-  D1 rows a day, so backfills cannot spend the account's whole 100,000-row daily
-  write budget and starve new-play pulls and uploads. A walk adds its batch's
-  `meta.rows_written` to the shared KV tally `backfill-rows`, which expires at
-  the next 00:00 UTC; a routine pull of new plays or an upload writes no tally.
-  Once the tally reaches the cap every pull skips its history walk — the gap
-  drain counts too — and schedules its next pull by the usual rule, so the
-  source keeps collecting new plays. At the measured 12 rows a play for new
-  tracks the cap admits roughly 4,000 plays a day, so a 50,000-play history
-  backfills in about twelve days.
+- **Backfill write cap.** History walks and imports across the account write at
+  most `maxBackfillRowsPerDay` (1,000,000) D1 rows a day, which caps them at 30
+  million rows a month, inside the 50 million that Workers Paid includes. New
+  plays, uploads and page traffic keep the other 20 million. A walk adds its
+  batch's `meta.rows_written` to the shared KV tally `backfill-rows`, which
+  expires at the next 00:00 UTC; a routine pull of new plays or an upload writes
+  no tally. Once the tally reaches the cap every pull skips its history walk —
+  the gap drain counts too — and schedules its next pull by the usual rule, so
+  the source keeps collecting new plays. At the measured 12 rows a play for new
+  tracks the cap admits roughly 80,000 plays a day, so a 50,000-play history
+  backfills in one day.
 
 stats.fm refreshes Spotify about every 100 minutes
 ([FAQ](https://support.spotistats.app/docs/import/spotify-import)), which is the
@@ -1083,9 +1087,9 @@ sign-in screen states that profiles are public.
   fails. No cascade is declared, so D1 never scans a table to find children.
   Cached snapshots in KV are keyed by the user id, which is never reused, and
   expire within a day.
-- D1 Time Travel keeps restore points for 7 days on the Free plan and 30 days on
-  Paid ([limits](https://developers.cloudflare.com/d1/platform/limits/)).
-  Deleted rows leave the restore points with them. The privacy text says so.
+- D1 Time Travel keeps restore points for 30 days on Workers Paid
+  ([limits](https://developers.cloudflare.com/d1/platform/limits/)). Deleted
+  rows leave the restore points with them. The privacy text says so.
 - **Export.** `GET /settings/export` answers the user's plays as NDJSON, one
   play per line, in pages of 1,000 rows by key. A full page carries a
   `Link: rel="next"` header whose `?after=` query resumes at the next key, so
@@ -1122,9 +1126,9 @@ sign-in screen states that profiles are public.
 - **Snapshots.** The figures of one user and period are cached in KV under
   `snap:<user id>:<period>`, with a TTL of 15 minutes for `week` and `month` and
   6 hours for `all`. A request that finds no snapshot computes it from D1 and
-  stores it. A failed KV write, which happens at the free tier's 1,000 writes a
-  day, never fails the request: the page is rendered from the fresh figures. The
-  profile, the JSON and the card read the same snapshot, so they agree.
+  stores it. A failed KV write never fails the request: the page is rendered
+  from the fresh figures. The profile, the JSON and the card read the same
+  snapshot, so they agree.
 - **Card.** The Worker builds the SVG from the snapshot by string templates. It
   loads no font and no image, since a README viewer would not fetch them: text
   uses the generic `sans-serif` family and the text is cut by display width,
@@ -1169,9 +1173,10 @@ page:
 | KV writes                  | 1,000 a day         | 1 million a month, then $5.00 per million   |
 | Static asset requests      | free, unlimited     | free, unlimited                             |
 
-A request that exceeds a Free daily limit fails until 00:00 UTC. The Free plan
-suits a pilot of a few dozen people. The Paid plan lifts every limit that
-follows.
+The service runs on Workers Paid. The Free column stays for comparison, because
+a fork on a free account meets it: a request over a Free daily limit fails until
+00:00 UTC, and a 1,000-listen pull tick is over the 10 ms of CPU that Free
+allows.
 
 **What a unit of work costs.**
 
@@ -1195,68 +1200,79 @@ follows.
 - The Worker bundle is 166 KiB, 42 KiB gzip, and evaluating it measures about
   9.7 ms in Node, locally.
 
-**Where the Free plan runs out,** in the order a service of one-user-per-day
-growth meets the limits. The local figures come from
-`apps/web/test/bench.test.ts`, which runs a recorded 300-listen ListenBrainz
-page (`apps/web/test/fixtures/listens-rob.json`) through the pull in the Vitest
+**Where Workers Paid runs out,** in the order a growing service meets the
+limits. The local figures come from `apps/web/test/bench.test.ts`, which runs a
+recorded 300-listen ListenBrainz page
+(`apps/web/test/fixtures/listens-rob.json`) through the pull in the Vitest
 workerd pool; `PULL_BENCH=1 npx vitest run bench` runs it, and the default suite
 skips it. The deployed figures are `wrangler tail` output from milestone 1 and
 from the `apps/web/bench/` worker, which splits a pull into one route per stage.
 
-1. **Cron CPU.** A first `wrangler tail` measured 10 to 23 ms CPU for six ticks
-   that each pulled a 200-listen backfill page of mostly new tracks, with 1.1 to
-   3.0 s of wall time. The work that grew with new tracks was the per-listen
-   normalisation and the matching batch. Normalisation now runs once per unique
-   artist or title on the page (a 200-listen page holds about 40 artists and 130
-   titles, not 400 strings), the two clause patterns are skipped when the text
-   holds none of their keywords, and the batch's JSON payloads are deduplicated
-   and carry only the fields each statement reads. A second `wrangler tail` on
-   2026-11-12 measured a pull tick at 16 to 24 ms `cpuTime` for a 200-listen
-   page (16, 17, 20, 23, 24 ms over five ticks), at 12 to 19 ms with the page
-   cut to 50 listens (12, 13, 18, 19 ms over four ticks), and an idle tick with
-   no source due at 1 to 2 ms. Every pull tick is over the 10 ms limit, and the
-   cost barely moves with page size, so most of it is fixed per invocation, not
-   per listen: the local bench measures about 1.2 ms of JavaScript for the same
-   200-listen page. A 200-track Last.fm page measures the same locally: about 1
-   ms of JavaScript for new and for stored plays, and 8 to 12 ms through local
-   D1 against 7 to 8 ms for the ListenBrainz page
-   (`apps/web/test/bench.test.ts`). The bench's own tail on 2026-11-12 measured
-   the stages, in `cpuTime`: the empty handler 0 ms, `JSON.parse` of the page 0
-   to 7 ms, the valibot parse 3 to 6 ms, `resolvePageTracks` 6 to 12 ms, the
-   store step with its D1 batch 6 to 17 ms, a pull with a fixture fetcher 5 to
-   17 ms, and a pull with a real fetch 4 to 28 ms, with a warm isolate repeating
-   the real pull at 4 to 11 ms. Deployed cost runs 5 to 10 times the local
-   figures. The fetch and the JSON parse are not the cost; track resolution, the
-   D1 batch and its result decoding are, and a cold isolate adds more. A warm
-   pull lands at 4 to 13 ms, at or over the 10 ms limit. The upload path shares
-   the matching code: `wrangler tail` measured 9 ms CPU for an upload of 200
-   plays on new tracks and 1 to 3 ms for 3-play uploads, and the same local
-   measure is about 0.95 ms. How many pulls a day the Free plan sustains, and so
-   how many users the plan holds, stays unknown. The duplicate mark runs after
-   every store on the span the page touched. The `apps/web/bench/` worker
-   measured it on 2026-11-13 over the 200 newest plays of the worse-ranked
-   source: each run marked 200 plays, read about 620 rows for the span statement
-   and wrote 1,200 rows, at 7, 12 and 7 ms `cpuTime` and 816 to 955 ms of wall
-   time. The 12 ms run is over the 10 ms Free limit. The `ytmusic` case, which
-   pairs plays by day rather than by the ten-minute window, is not yet measured.
-2. **KV writes.** 1,000 snapshot writes a day cap the number of distinct
-   profiles that can refresh in a day. A cold snapshot is still served, so the
-   cap costs D1 reads, not availability.
-3. **D1 writes.** 100,000 rows a day is about 8,000 new plays a day while tracks
-   are new (measured at 12 rows a play), or 12,500 when the tracks are already
-   stored (about 8 rows). A large backfill is heavier: 50,000 plays and their
-   new tracks need an estimated 600,000 rows, which the 50,000-row backfill cap
-   of [Pulled sources](#pulled-sources) spreads over about twelve days so pulls
-   of new plays and uploads keep working. If the account cap is still hit, D1
-   refuses every query past it, including the pull's own write, so the pull
-   records the cap in a KV key that expires at the next 00:00 UTC and ticks
-   check it before touching D1.
-4. **Requests.** 100,000 a day is about one a second on average. A cron tick is
-   one request, so ticks use 1,440 of them. Public pages are cheap to serve, but
-   every view of a profile or card is a Worker request.
-
-The first upgrade is Workers Paid at $5 a month. It lifts items 1, 2 and 4 and
-leaves D1 writes at 50 million rows a month, about 8 million plays.
+1. **D1 writes.** 50 million rows a month are included, then $1.00 per million.
+   A new play writes about 7 rows on a known track and 12 on a new one, so the
+   included rows hold about 4 to 7 million new plays a month. The backfill cap
+   of [Pulled sources](#pulled-sources) holds history walks and imports to 30
+   million of them. A heavy month spends the whole cap and stores 100,000 new
+   plays a day, about 1,000 users at 100 plays each: 30 million + 21 million +
+   about 1 million for the pulls that find nothing (2 rows each) is 52 million
+   rows, so the month costs $5 plus about $2. Lowering `maxBackfillRowsPerDay`
+   is the lever if the overage grows. The Worker still handles a D1 daily-limit
+   error, which only Free returns: it records the cap in a KV key that expires
+   at the next 00:00 UTC, and ticks check it before touching D1.
+2. **Cron throughput.** A tick pulls up to `maxSourcesPerPull` (10) sources one
+   after the other, so 1,440 ticks make 14,400 pulls a day. A source that finds
+   plays is due again in 15 minutes, 96 pulls a day; an idle one backs off to 6
+   hours, 4 a day. That holds about 150 sources that always have new plays, or
+   about 3,600 idle ones; a real mix sits between. Past it, due sources wait in
+   `sources_due` order and nothing fails. A 1,000-listen pull measures about 1.7
+   s of wall time on the bench, so ten pulls take about 17 s. Raising the
+   constant must keep a tick under the 60 s between ticks, or the next tick
+   selects the same sources before their `next_pull_at` moves.
+3. **Requests.** 10 million a month are included, then $0.30 per million: about
+   four requests a second on average. The cron takes 43,200 of them. Every view
+   of a profile or card is a Worker request.
+4. **KV writes.** 1 million a month are included, about 33,000 snapshot
+   refreshes a day. A cold snapshot is still served, so the limit costs D1
+   reads, not availability.
+5. **CPU.** Not a limit at these sizes: 30 s per request and per tick, against
+   tens of milliseconds measured. A first `wrangler tail` measured 10 to 23 ms
+   CPU for six ticks that each pulled a 200-listen backfill page of mostly new
+   tracks, with 1.1 to 3.0 s of wall time. The work that grew with new tracks
+   was the per-listen normalisation and the matching batch. Normalisation now
+   runs once per unique artist or title on the page (a 200-listen page holds
+   about 40 artists and 130 titles, not 400 strings), the two clause patterns
+   are skipped when the text holds none of their keywords, and the batch's JSON
+   payloads are deduplicated and carry only the fields each statement reads. A
+   second `wrangler tail` on 2026-11-12 measured a pull tick at 16 to 24 ms
+   `cpuTime` for a 200-listen page (16, 17, 20, 23, 24 ms over five ticks), at
+   12 to 19 ms with the page cut to 50 listens (12, 13, 18, 19 ms over four
+   ticks), and an idle tick with no source due at 1 to 2 ms. The cost barely
+   moves with page size, so most of it is fixed per invocation, not per listen:
+   the local bench measures about 1.2 ms of JavaScript for the same 200-listen
+   page. A 200-track Last.fm page measures the same locally: about 1 ms of
+   JavaScript for new and for stored plays, and 8 to 12 ms through local D1
+   against 7 to 8 ms for the ListenBrainz page (`apps/web/test/bench.test.ts`).
+   The bench's own tail on 2026-11-12 measured the stages, in `cpuTime`: the
+   empty handler 0 ms, `JSON.parse` of the page 0 to 7 ms, the valibot parse 3
+   to 6 ms, `resolvePageTracks` 6 to 12 ms, the store step with its D1 batch 6
+   to 17 ms, a pull with a fixture fetcher 5 to 17 ms, and a pull with a real
+   fetch 4 to 28 ms, with a warm isolate repeating the real pull at 4 to 11 ms.
+   Deployed cost runs 5 to 10 times the local figures. The fetch and the JSON
+   parse are not the cost; track resolution, the D1 batch and its result
+   decoding are, and a cold isolate adds more. A warm pull lands at 4 to 13 ms.
+   The upload path shares the matching code: `wrangler tail` measured 9 ms CPU
+   for an upload of 200 plays on new tracks and 1 to 3 ms for 3-play uploads,
+   and the same local measure is about 0.95 ms. On 2026-11-13 the bench measured
+   the Paid sizes, each call storing new plays after a reset: `/store` at 2 to 8
+   ms for 200 listens and 5 to 8 ms for 1,000, `/pull` with the fixture fetcher
+   at 5 to 11 ms for 200 and 10 to 24 ms for 1,000, at 1.5 to 1.7 s of wall
+   time. An import batch runs the same store step. The duplicate mark runs after
+   every store on the span the page touched. The bench measured it on 2026-11-13
+   over the 200 newest plays of the worse-ranked source: each run marked 200
+   plays and wrote 1,200 rows. The `lastfm` case, which pairs by the ten-minute
+   window, read about 620 rows for the span statement at 7, 12 and 7 ms
+   `cpuTime` and 816 to 955 ms of wall time. The `ytmusic` case, which pairs by
+   day, read about 400 rows at 10, 12 and 10 ms and about 1 s of wall time.
 
 ### The Last.fm launch gate
 
@@ -1375,10 +1391,10 @@ Each milestone ships on its own and ends with a check a person can run.
    the import panel on the settings page, `apps/web/public/import-parse.js` and
    `apps/web/public/import.js`, a `ref` per play in `storeListens`, and the two
    kinds in the rank list and day test of `markDuplicates`. It measures, on the
-   deployed Worker and real D1, the CPU of a 100-play batch on new tracks (the
-   batch size drops if it is over 8 ms), the rows written per play for known and
-   new tracks, and the rows written per play of a removal chunk. _Done when_
-   these hold, each in an automated test unless it says live:
+   deployed Worker and real D1, the CPU of a 1,000-play batch on new tracks, the
+   rows written per play for known and new tracks, and the rows written per play
+   of a removal chunk. _Done when_ these hold, each in an automated test unless
+   it says live:
    1. A Spotify file of eight records is posted: a track played 29,999 ms; the
       same track at 30,000 ms (kept); a 200,000 ms play with `incognito_mode`
       true; a podcast episode with a null track URI; a track with a null track
@@ -1399,15 +1415,15 @@ Each milestone ships on its own and ends with a check a person can run.
       `ytmusic_import` play of the same video at 18:00 UTC on that day count
       once, and the push row has `dup = 1`. A ListenBrainz play and a
       `ytmusic_import` play of the same track 3 hours apart both count.
-   4. With the tally `backfill-rows` at 50,000, a batch gets `429` with
+   4. With the tally `backfill-rows` at 1,000,000, a batch gets `429` with
       `Retry-After` equal to the seconds to 00:00 UTC and stores nothing. At
-      49,999 the batch is stored and the tally grows by the rows it wrote.
+      999,999 the batch is stored and the tally grows by the rows it wrote.
    5. A source of 2,001 plays is removed in two requests: the first answers
       `removed` 2000 and `remaining` 1, the second `remaining` 0 and deletes the
       source. The three totals tables then equal a recount from the remaining
       plays. After removing the import of case 3, the ListenBrainz play counts
       again.
-   6. A batch of 101 plays gets `422` and nothing is stored.
+   6. A batch of 1,001 plays gets `422` and nothing is stored.
    7. Live: on an account with no other source, the operator imports one real
       extended history of at least 1,000 plays on the deployed Worker. The
       all-time total on `/u/NAME` equals the count of kept plays that the page
