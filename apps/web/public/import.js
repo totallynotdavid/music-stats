@@ -1,6 +1,6 @@
 import { detectKind, spotifyPlays, takeoutPlays } from "./import-parse.js";
 
-const batchSize = 100;
+const batchSize = 1000;
 const files = document.getElementById("import-files");
 const start = document.getElementById("import-start");
 const status = document.getElementById("import-status");

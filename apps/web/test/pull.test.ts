@@ -2,8 +2,9 @@ import { applyD1Migrations, env, reset } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import migrations from "virtual:web-migrations";
 import worker from "../src/index";
-import { pullListenBrainz } from "../src/listenbrainz";
+import { maxListensPerPull, pullListenBrainz } from "../src/listenbrainz";
 import { pullDueSources } from "../src/cron";
+import { maxBackfillRowsPerDay, maxSourcesPerPull } from "../src/pull";
 import { storeListens } from "../src/matching";
 import type { SourceRow } from "../src/types";
 import fixture from "./fixtures/listens-rob.json";
@@ -77,7 +78,7 @@ describe("pull scheduling", () => {
       return listensBody(full);
     };
     const first = await pullListenBrainz(env, await sourceRow(), fetcher, now);
-    expect(first.inserted).toBe(200);
+    expect(first.inserted).toBe(maxListensPerPull);
     expect(
       await env.DB.prepare(
         "SELECT next_pull_at FROM sources WHERE id = 10",
@@ -283,11 +284,16 @@ describe("pull scheduling", () => {
         return listensBody(
           Array.from({ length: wanted }, (_, index) => make(index)),
         );
-      return listensBody([{ ...make(200), listened_at: now - 400 }]);
+      return listensBody([
+        {
+          ...make(maxListensPerPull),
+          listened_at: now - 200 - maxListensPerPull,
+        },
+      ]);
     };
     const first = await pullListenBrainz(env, await sourceRow(), fetcher, now);
-    expect(first.inserted).toBe(199);
-    expect(first.backfillBefore).toBe(now - 299);
+    expect(first.inserted).toBe(maxListensPerPull - 1);
+    expect(first.backfillBefore).toBe(now - 99 - maxListensPerPull);
     const second = await pullListenBrainz(
       env,
       await sourceRow(),
@@ -296,7 +302,7 @@ describe("pull scheduling", () => {
     );
     expect(second.inserted).toBe(1);
     expect(second.backfillBefore).toBeNull();
-    expect(await count("plays")).toBe(201);
+    expect(await count("plays")).toBe(maxListensPerPull + 1);
   });
 
   it("stops the gap walk at the old cursor", async () => {
@@ -387,8 +393,8 @@ describe("pull scheduling", () => {
       );
     };
     const result = await pullListenBrainz(env, await sourceRow(), fetcher, now);
-    expect(result.inserted).toBe(200);
-    expect(await count("plays")).toBe(200);
+    expect(result.inserted).toBe(maxListensPerPull);
+    expect(await count("plays")).toBe(maxListensPerPull);
     expect(
       await env.DB.prepare(
         "SELECT next_pull_at FROM sources WHERE id = 10",
@@ -479,7 +485,7 @@ describe("pull scheduling", () => {
 
   it("skips the history walk once the daily row tally reaches the cap", async () => {
     await seedUser({ cursor: now, backfill_before: now - 1 });
-    await env.CACHE.put("backfill-rows", "50000");
+    await env.CACHE.put("backfill-rows", String(maxBackfillRowsPerDay));
     const current = listens.map((listen, index) => ({
       ...listen,
       listened_at: now - index,
@@ -517,7 +523,7 @@ describe("pull scheduling", () => {
     )
       .bind(now, now - 500, now)
       .run();
-    await env.CACHE.put("backfill-rows", "50000");
+    await env.CACHE.put("backfill-rows", String(maxBackfillRowsPerDay));
     const fetcher = vi.fn(async (_url: string) => listensBody(listens));
     const other = await env.DB.prepare(
       "SELECT * FROM sources WHERE id = 20",
@@ -586,20 +592,21 @@ describe("pull scheduling", () => {
     expect(used).toBe(60000);
   });
 
-  it("pulls only one due source in one tick", async () => {
+  it("pulls at most maxSourcesPerPull due sources in one tick", async () => {
+    const due = maxSourcesPerPull + 3;
     await env.DB.prepare(
-      `WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 4)
+      `WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < ?2)
        INSERT INTO users (id, github_id, name, created_at)
        SELECT n, n + 100, 'due-' || n, ?1 FROM numbers`,
     )
-      .bind(now)
+      .bind(now, due)
       .run();
     await env.DB.prepare(
-      `WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 4)
+      `WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < ?2)
        INSERT INTO sources (id, user_id, kind, account, next_pull_at)
        SELECT n + 10, n, 'listenbrainz', 'due-' || n, ?1 FROM numbers`,
     )
-      .bind(now)
+      .bind(now, due)
       .run();
     const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
@@ -608,7 +615,7 @@ describe("pull scheduling", () => {
         }),
     );
     await pullDueSources(env, now);
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(maxSourcesPerPull);
   });
 
   it("persists exponential backoff after failed pulls", async () => {

@@ -11,7 +11,7 @@ import {
 } from "./pull";
 import type { Env } from "./types";
 
-export const importBatchSize = 100;
+export const importBatchSize = 1000;
 export const removeChunkSize = 2000;
 
 const earliestPlay = Date.parse("2005-01-01T00:00:00.000Z") / 1000;

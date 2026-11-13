@@ -18,7 +18,7 @@ import type { Env } from "./types";
 import { importPlays, importRemove } from "./import";
 
 const exportPageSize = 1000;
-const importBodyLimit = 64 * 1024;
+const importBodyLimit = 1024 * 1024;
 
 const exportScript = `
 const exportAll = document.getElementById("export-all");
@@ -720,7 +720,7 @@ settingsApp.post("/tokens", async (context) => {
 });
 
 const tooLarge = (context: SettingsContext) =>
-  context.json({ error: "the body is over the 64 KiB limit" }, 413);
+  context.json({ error: "the body is over the 1 MiB limit" }, 413);
 
 settingsApp.post(
   "/import",

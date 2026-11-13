@@ -45,6 +45,16 @@ In the tail output each event carries `event.request.url`, `cpuTimeMs` and
 `wallTimeMs`. `cpuTimeMs` is the billed CPU; match it to a request by the URL.
 Run `/reset` again after the sweep to remove the bench rows.
 
+`/resolve`, `/store` and `/pull` take `?n=1..1000`, the listens on the page (200
+by default). A page over the recording's 300 listens repeats it, each copy older
+than the last by the recording's span, so every listen is a distinct play. The
+tracks repeat, so a page past 300 is mostly known tracks. On 2026-11-13, with
+`/reset` before each call so every call stored new plays, `/store` measured 2 to
+8 ms `cpuTime` at `n=200` and 5 to 8 ms at `n=1000`, and `/pull` 5 to 11 ms at
+`n=200` and 10 to 24 ms at `n=1000`, at 1.5 to 1.7 s of wall time. A
+1,000-listen store wrote 994 plays: the recording holds a few listens that share
+a timestamp.
+
 The `ms` array each route returns is a helper, not the measure. A deployed
 Worker advances timers across I/O, not during synchronous execution, so the
 per-run `ms` undercounts the purely synchronous stages. `cpuTimeMs` from the
@@ -101,12 +111,12 @@ is `/dups-seed`, then `/dups` (with `/dups-reset` before each repeat), then
 Deployed on 2026-11-13, three `/dups` runs at `kind=lastfm` each marked 200
 plays and wrote 1,200 rows, at 7, 12 and 7 ms `cpuTime` and 816 to 955 ms of
 wall time; D1's per-query analytics counted about 620 rows read a run for the
-span statement. That run's seed, 5,000 plays a source, wrote about 55,000 rows,
-over half the Free plan's 100,000 rows a day. The resized seed writes an
-estimated 2,800 rows: 400 plays at the 7 rows a play of
-[docs/web-app.md](../../docs/web-app.md) for a known track, plus the shared
-`dartist` and `dtrack` catalogue rows on the first seed. The `ytmusic` case is
-not yet measured.
+span statement. Three runs at `kind=ytmusic` each marked 200 plays and wrote
+1,200 rows, at 10, 12 and 10 ms `cpuTime` and about 1 s of wall time, and read
+about 400 rows for the span statement. The seed writes an estimated 2,800 rows:
+400 plays at the 7 rows a play of [docs/web-app.md](../../docs/web-app.md) for a
+known track, plus the shared `dartist` and `dtrack` catalogue rows on the first
+seed.
 
 ## What the bench writes
 

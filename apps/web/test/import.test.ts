@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import migrations from "virtual:web-migrations";
 import { app } from "../src/app";
 import { markDuplicates } from "../src/duplicates";
+import { importBatchSize } from "../src/import";
+import { maxBackfillRowsPerDay } from "../src/pull";
 // @ts-expect-error the page parser is an untyped static asset
 import { spotifyPlays, takeoutPlays } from "../public/import-parse.js";
 
@@ -223,11 +225,11 @@ async function postPlays(
   plays: Array<{ at: number; id: string; artist: string; title: string }>,
 ) {
   const responses = [];
-  for (let i = 0; i < plays.length; i += 100)
+  for (let i = 0; i < plays.length; i += importBatchSize)
     responses.push(
       await post("/settings/import", {
         source,
-        plays: plays.slice(i, i + 100),
+        plays: plays.slice(i, i + importBatchSize),
       }),
     );
   return responses;
@@ -294,7 +296,7 @@ describe("import of a Spotify extended history", () => {
         inserted: 3,
         duplicate: 0,
         used: expect.any(Number),
-        limit: 50000,
+        limit: maxBackfillRowsPerDay,
       },
     ]);
     const stored = await env.DB.prepare(
@@ -469,7 +471,7 @@ describe("imports in cross-source duplicates", () => {
 describe("the backfill tally", () => {
   it("answers 429 with the seconds to midnight at the cap and stores a batch one row under it", async () => {
     await seedUser();
-    await env.CACHE.put("backfill-rows", "50000");
+    await env.CACHE.put("backfill-rows", String(maxBackfillRowsPerDay));
     const play = {
       at: noon,
       id: "a".repeat(22),
@@ -488,7 +490,7 @@ describe("the backfill tally", () => {
     expect(retryAfter).toBeLessThanOrEqual(midnight - received + 2);
     expect(await count("plays")).toBe(0);
 
-    await env.CACHE.put("backfill-rows", "49999");
+    await env.CACHE.put("backfill-rows", String(maxBackfillRowsPerDay - 1));
     const allowed = await post("/settings/import", {
       source: "spotify",
       plays: [play],
@@ -942,7 +944,7 @@ describe("removing an import", () => {
     )
       .bind(noon)
       .run();
-    await env.CACHE.put("backfill-rows", "50000");
+    await env.CACHE.put("backfill-rows", String(maxBackfillRowsPerDay));
     const response = await post("/settings/import/remove", {
       source: "spotify",
     });
@@ -953,11 +955,11 @@ describe("removing an import", () => {
 });
 
 describe("the import body", () => {
-  it("rejects a batch of 101 plays with 422 and stores nothing", async () => {
+  it("rejects a batch over importBatchSize with 422 and stores nothing", async () => {
     await seedUser();
     const response = await post("/settings/import", {
       source: "spotify",
-      plays: Array.from({ length: 101 }, (_, i) => ({
+      plays: Array.from({ length: importBatchSize + 1 }, (_, i) => ({
         at: noon - i,
         id: "a".repeat(22),
         artist: "Artist",
