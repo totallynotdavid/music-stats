@@ -679,10 +679,10 @@ Content-Type: application/json
   `429` with `Retry-After` set to the seconds left to 00:00 UTC, and nothing is
   stored. (2) Upsert the user's import source, `spotify_import` or
   `ytmusic_import`, and read its id. (3) `storeListens` with matching kind
-  `spotify` or `ytmusic`. (4) `markDuplicates` over the span of the batch, with
-  the entry point milestone 6 gives it. (5) Add the rows written by steps 3 and
-  4 to the tally. The check happens before the write, so a batch that starts
-  under the limit can end up to one batch over it, about 940 rows.
+  `spotify` or `ytmusic`. (4) `markDuplicates` over the span of the batch. (5)
+  Add the rows written by steps 3 and 4 to the tally. The check happens before
+  the write, so a batch that starts under the limit can end up to one batch over
+  it, about 1,200 rows.
 - **Retry.** A failed batch is sent again. The plays are ignored the second time
   and the marking repeats over the same span, so a failure between steps 3 and 4
   leaves no unmarked play after the retry.
@@ -690,20 +690,22 @@ Content-Type: application/json
 `storeListens` gains an optional `ref` per play, which `bulkPlaySql` writes in
 place of `''`. Nothing else in the store path changes.
 
-**Rows and the cap.** A play on a known track writes 6 rows and a play on a new
-track about 9.4 ([section 6](#6-limits-and-costs)). An imported play costs the
-same, because the table has no secondary index and a longer `ref` adds no row. A
-batch is about 600 rows, or 940 when every track is new. The imports share the
-50,000-row `backfill-rows` tally with the history walks, so a day admits 53 to
-83 batches. A history of 100,000 plays in which one play in five is on a new
-track writes 100,000 × 6 + 20,000 × 3.4 = 668,000 rows. That is about 75 batches
-a day for 14 days, 1,000 batches in all. All new tracks give 940,000 rows and 19
-days, and all known tracks 600,000 rows and 12 days. The plays that
-markDuplicates flags add the rows of its updates, which milestone 6 measures.
-While an import runs, history walks wait for the same tally and pulls of new
-plays and uploads carry on. The tally belongs to the account, not to a user, so
-on the Free plan all users share roughly 7,500 imported plays a day. The Paid
-plan lets the operator raise `maxBackfillRowsPerDay`.
+**Rows and the cap.** An imported play writes 8 rows on a known track and about
+12 on a new one, measured through `POST /settings/import` on local D1 — about
+one row more a play than the statements alone write for a stored play
+([section 6](#6-limits-and-costs)). A stored play costs more than it did before
+migration 0005, whose `plays_source` index adds a row to every play write. A
+batch is about 800 rows, or 1,200 when every track is new. The imports share the
+50,000-row `backfill-rows` tally with the history walks, so a day admits 41 to
+62 batches. A history of 100,000 plays in which one play in five is on a new
+track writes 100,000 × 8 + 20,000 × 4 = 880,000 rows. That is about 55 batches a
+day for 18 days, 1,000 batches in all. All new tracks give 1,200,000 rows and 24
+days, and all known tracks 800,000 rows and 16 days. The plays that
+`markDuplicates` flags add the rows of its updates. While an import runs,
+history walks wait for the same tally and pulls of new plays and uploads carry
+on. The tally belongs to the account, not to a user, so on the Free plan all
+users share roughly 6,000 imported plays a day. The Paid plan lets the operator
+raise `maxBackfillRowsPerDay`.
 
 When the page gets `429` it stops and says that the limit is reached and when it
 resets. The user selects the same files on a later day. The page keeps in
@@ -767,7 +769,10 @@ POST /settings/import/remove
 { "source": "spotify", "removed": 2000, "remaining": 98000 }
 ```
 
-The page repeats the request until `remaining` is 0. Each request takes the
+The page repeats the request until `remaining` is 0. `remaining` comes from
+`sources.play_count` minus the chunk's size: an import batch raises the count by
+the plays it inserted, and each removal chunk lowers it again, so a request
+reads one chunk and never counts the source's plays. Each request takes the
 `removeChunkSize` (2,000) oldest plays of the source, in these steps:
 
 1. Read the tally. At the limit the answer is `429`, as for a batch of plays.
@@ -775,24 +780,28 @@ The page repeats the request until `remaining` is 0. Each request takes the
    `artist_totals` and `daily_totals` by the counts of the chunk's plays with
    `dup = 0`, grouped by track, artist and day, and deletes a totals row that
    reaches 0. It sets `dup = 0` on the other sources' plays that lie in the
-   chunk's span widened by the pairing window, and adds them back to the three
-   totals with the same grouped counts. It deletes the chunk's plays. When the
-   chunk is the last, it deletes the `sources` row too.
-3. `markDuplicates` over the same span, so a play that another source still
-   shadows is marked again, and a play that only the import shadowed counts.
+   chunk's span widened by the pairing window and the YouTube Music day rule,
+   and the `plays_recounted` trigger adds each reopened play back to the three
+   totals. It lowers `sources.play_count` by the chunk's size and deletes the
+   chunk's plays. When the chunk is the last, it deletes the `sources` row too.
+3. `markDuplicates` over the span of the reopened plays, from the earliest to
+   the latest `played_at` the reopening returned, so a play that another source
+   still shadows is marked again, and a play that only the import shadowed
+   counts.
 4. Add the rows written to the tally.
 
 The batch changes the totals together with the plays, so after step 2 the
 invariant `plays = count of rows with dup = 0` holds, and a user who stops
 halfway holds a smaller import. A failure between steps 2 and 3 leaves the plays
 of that span unmarked until a later `markDuplicates` over it, which can count a
-play twice in the meantime. The statements of step 2 write at most 6 rows for
-each play they touch, the chunk's and the reopened ones: 1 for the play, 2 for
-each of the track and artist totals rows, and 1 for the day. A chunk repeats
-tracks, artists and days, so the usual cost is lower. The bound gives 12,000
-rows a chunk, which is also the most the tally can pass its limit, and 600,000
-rows for 100,000 plays, or 12 days of the tally. The bound comes from the schema
-and is not a D1 measurement; milestone 8 measures it.
+play twice in the meantime. The statements of step 2 write at most 7 rows for
+each play they touch, the chunk's and the reopened ones: 2 for the play row and
+its `plays_source` entry, 2 for each of the track and artist totals rows, and 1
+for the day. A chunk repeats tracks, artists and days, so the usual cost is
+lower, but the reopening can touch more plays than the chunk holds. Measured on
+local D1, a chunk of 2,000 plays read about 82,000 rows and wrote 2,012; a chunk
+that reopened 2,000 marked plays of another source read about 176,000 and wrote
+14,012, which is also the most the tally passed its limit in that run.
 `track_totals.last_played_at` is not corrected by a removal, and no query reads
 it.
 
@@ -906,7 +915,11 @@ The play from the source with the richer evidence stays counted: `spotify`, then
 `plays_uncounted` trigger fixes the totals. When the better source arrives
 later, as in a Last.fm backfill after a Spotify play, the same rule marks the
 older row. The code is one function, `markDuplicates`, tested as a table of
-cases.
+cases. It reads the span once and groups the plays by track in the Worker. Each
+track's span is then widened by the pairing window and the YouTube Music day
+rule. While a widened span reaches past the covered range, the function reads
+the missing range below it and the missing range above it, widens the spans
+again, and repeats until every span is covered. Then it pairs.
 
 **Known limit.** A mark is never undone, so a chain of plays that spans more
 than 600 s can count differently by the order its sources arrive. Take a track
@@ -916,7 +929,10 @@ and Last.fm is marked. Spotify then arrives, pairs with ListenBrainz and marks
 it, and the marked Last.fm play stays marked: the track counts 1 play. One store
 of all three pairs Spotify with ListenBrainz and leaves Last.fm counted: it
 counts 2. Lifting the limit needs a trigger that recounts a play when `dup` goes
-from 1 to 0.
+from 1 to 0. Migration 0005 adds that trigger, `plays_recounted`, which returns
+a play's totals when `dup` goes from 1 to 0; the import removal fires it for the
+plays it reopens. What is still missing is a pass that unmarks: `markDuplicates`
+only ever sets `dup` to 1, so the mis-ordered chain above keeps its count of 1.
 
 ## Pulled sources
 
@@ -975,9 +991,9 @@ what a tick costs against the Free plan's
   the next 00:00 UTC; a routine pull of new plays or an upload writes no tally.
   Once the tally reaches the cap every pull skips its history walk — the gap
   drain counts too — and schedules its next pull by the usual rule, so the
-  source keeps collecting new plays. At the measured 9.4 rows a play for new
-  tracks the cap admits roughly 5,000 plays a day, so a 50,000-play history
-  backfills in about ten days.
+  source keeps collecting new plays. At the measured 12 rows a play for new
+  tracks the cap admits roughly 4,000 plays a day, so a 50,000-play history
+  backfills in about twelve days.
 
 stats.fm refreshes Spotify about every 100 minutes
 ([FAQ](https://support.spotistats.app/docs/import/spotify-import)), which is the
@@ -1159,16 +1175,17 @@ follows.
 
 **What a unit of work costs.**
 
-- A new play on a known track writes 6 rows, measured locally: one in `plays`,
-  the `daily_totals` upsert, and the `track_totals` and `artist_totals` upserts,
-  which D1 bills as two rows each because they change an indexed column
+- A new play on a known track writes 7 rows, measured locally: the play row and
+  its `plays_source` index entry, the `daily_totals` upsert, and the
+  `track_totals` and `artist_totals` upserts, which D1 bills as two rows each
+  because they change an indexed column
   ([pricing](https://developers.cloudflare.com/d1/platform/pricing/)). A play
-  whose track is new costs more: a 200-play page of new tracks wrote 1,880 rows
-  locally, about 9 a play, because a new track adds its `artists`, `tracks` and
-  `track_aliases` rows and their index entries, shared by all users. A pull with
-  no new plays writes two rows: the `sources` row and its `sources_due` index
-  entry. A play row is an estimated 40 bytes, so 500 MB holds on the order of
-  ten million plays.
+  whose track is new costs more: a 100-play import batch of new tracks wrote
+  about 1,200 rows locally, 12 a play, because a new track adds its `artists`,
+  `tracks` and `track_aliases` rows and their index entries, shared by all
+  users. A pull with no new plays writes two rows: the `sources` row and its
+  `sources_due` index entry. A play row is an estimated 40 bytes, so 500 MB
+  holds on the order of ten million plays.
 - A profile, JSON or card request with a warm snapshot reads one `users` row and
   one KV key. A cold one reads the rows of the period: about 350 plays for a
   week of a heavy listener, and about 1,500 for a month. `all` reads the totals
@@ -1219,14 +1236,14 @@ the `web/bench/` worker, which splits a pull into one route per stage.
 2. **KV writes.** 1,000 snapshot writes a day cap the number of distinct
    profiles that can refresh in a day. A cold snapshot is still served, so the
    cap costs D1 reads, not availability.
-3. **D1 writes.** 100,000 rows a day is about 10,000 new plays a day while
-   tracks are new (measured at 9.4 rows a play), or 16,000 when the tracks are
-   already stored (about 6 rows). A large backfill is heavier: 50,000 plays and
-   their new tracks need an estimated 470,000 rows, which the 50,000-row
-   backfill cap of [Pulled sources](#pulled-sources) spreads over about ten days
-   so pulls of new plays and uploads keep working. If the account cap is still
-   hit, D1 refuses every query past it, including the pull's own write, so the
-   pull records the cap in a KV key that expires at the next 00:00 UTC and ticks
+3. **D1 writes.** 100,000 rows a day is about 8,000 new plays a day while tracks
+   are new (measured at 12 rows a play), or 12,500 when the tracks are already
+   stored (about 8 rows). A large backfill is heavier: 50,000 plays and their
+   new tracks need an estimated 600,000 rows, which the 50,000-row backfill cap
+   of [Pulled sources](#pulled-sources) spreads over about twelve days so pulls
+   of new plays and uploads keep working. If the account cap is still hit, D1
+   refuses every query past it, including the pull's own write, so the pull
+   records the cap in a KV key that expires at the next 00:00 UTC and ticks
    check it before touching D1.
 4. **Requests.** 100,000 a day is about one a second on average. A cron tick is
    one request, so ticks use 1,440 of them. Public pages are cheap to serve, but
