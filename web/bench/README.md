@@ -63,6 +63,10 @@ tail is the figure to compare across routes.
 | `/pull`           | `pullListenBrainz` with a fixture fetcher          | 10-30 ms | 5-17 ms            |
 | `/pull-live`      | `pullListenBrainz` with real `fetch` of user `rob` | 1.9 s    | 4-28 ms            |
 | `/lastfm`         | `pullLastFm` with a fixture fetcher                | 8-12 ms  | -                  |
+| `/dups-seed`      | Seeds the `_dups` user, two sources and 400 plays  | -        | -                  |
+| `/dups-reset`     | Clears `dup` on the last 200 loser plays           | -        | -                  |
+| `/dups`           | `markDuplicates` over the last 200 loser plays     | -        | 7-12 ms            |
+| `/dups-delete`    | Deletes the `_dups` user's rows                    | -        | -                  |
 | `/reset`          | Deletes the bench user's rows                      | -        | -                  |
 
 The page is the first 200 listens of `web/test/fixtures/listens-rob.json`, the
@@ -79,6 +83,30 @@ repeat=1, 2 and 5, plus a warm-isolate pass at repeat=1 (`/pull` 7-13,
 `/pull-live` 4-11, `/json` 0-1). It runs 5 to 10 times the local figure on the
 same stage. The fetch and the JSON parse are not the cost: track resolution, the
 D1 batch and its result decoding are, and a cold isolate adds more on top.
+
+The `/dups` routes measure `markDuplicates`, the mark a pull runs over the span
+its page touches. `/dups-seed?kind=lastfm` or `?kind=ytmusic` creates a `_dups`
+user (id -3) with a ListenBrainz anchor source (id -3) and a loser source of the
+named kind (id -4), then writes 200 plays to each: a `lastfm` seed puts each
+loser play five seconds after its anchor pair, a `ytmusic` seed puts it at noon
+of the anchor's day. 200 is the depth the mark reads: the range lookup takes the
+last 200 loser plays and the span extension reaches only the window around them,
+so a larger seed adds writes without changing the span, the pairs or the 200
+marks. `/dups-reset` clears `dup` on the last 200 loser plays so `/dups` can run
+again, and `/dups-delete` removes the user's rows, which a seed does not:
+deleting them is what lets a second kind run inside the day's write limit. A run
+is `/dups-seed`, then `/dups` (with `/dups-reset` before each repeat), then
+`/dups-delete`.
+
+Deployed on 2026-11-13, three `/dups` runs at `kind=lastfm` each marked 200
+plays and wrote 1,200 rows, at 7, 12 and 7 ms `cpuTime` and 816 to 955 ms of
+wall time; D1's per-query analytics counted about 620 rows read a run for the
+span statement. That run's seed, 5,000 plays a source, wrote about 55,000 rows,
+over half the Free plan's 100,000 rows a day. The resized seed writes an
+estimated 2,800 rows: 400 plays at the 7 rows a play of
+[docs/web-app.md](../../docs/web-app.md) for a known track, plus the shared
+`dartist` and `dtrack` catalogue rows on the first seed. The `ytmusic` case is
+not yet measured.
 
 ## What the bench writes
 

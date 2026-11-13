@@ -1232,7 +1232,13 @@ the `web/bench/` worker, which splits a pull into one route per stage.
    `wrangler tail` measured 9 ms CPU for an upload of 200 plays on new tracks
    and 1 to 3 ms for 3-play uploads, and the same local measure is about 0.95
    ms. How many pulls a day the Free plan sustains, and so how many users the
-   plan holds, stays unknown.
+   plan holds, stays unknown. The duplicate mark runs after every store on the
+   span the page touched. The `web/bench/` worker measured it on 2026-11-13 over
+   the 200 newest plays of the worse-ranked source: each run marked 200 plays,
+   read about 620 rows for the span statement and wrote 1,200 rows, at 7, 12 and
+   7 ms `cpuTime` and 816 to 955 ms of wall time. The 12 ms run is over the 10
+   ms Free limit. The `ytmusic` case, which pairs plays by day rather than by
+   the ten-minute window, is not yet measured.
 2. **KV writes.** 1,000 snapshot writes a day cap the number of distinct
    profiles that can refresh in a day. A cold snapshot is still served, so the
    cap costs D1 reads, not availability.
