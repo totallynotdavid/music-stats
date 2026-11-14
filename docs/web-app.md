@@ -843,6 +843,7 @@ sign-in screen states that profiles are public.
 | `/u/NAME`      | HTML profile. `?period=week` (default), `month`, `all`.     |
 | `/u/NAME.json` | The same figures as JSON.                                   |
 | `/u/NAME.svg`  | The card. `?period=`, `?n=1..10`, `?theme=light` or `dark`. |
+| `/play`        | The guess-the-song game.                                    |
 
 - **Periods.** `week` is the last 7 days, `month` the last 30 days, both
   rolling, and `all` is everything. A calendar week would be empty on Monday
@@ -877,6 +878,42 @@ sign-in screen states that profiles are public.
   The third-party text in them is never trusted.
 - **Link preview.** The profile carries `og:title` and `og:image` that points at
   the card.
+
+## Guess the song
+
+`/play` is a solo quiz: ten rounds, each a 15-second preview clip. The player
+picks a category and answers by choosing one of four titles or by typing the
+title.
+
+- **Categories.** The `categories` table lists a slug, a display name and a
+  feed: a Deezer chart genre id, a Deezer playlist id or an Apple country chart.
+  Migration `0008` seeds Pop, Rock, Metal, K-pop, Anime, Top 50 Japan, Top 50
+  Peru, Top 50 Global and "From my listening", which reads the signed-in
+  player's `track_totals`. A new category is a row.
+- **Sources.** Feeds come from the Deezer public API (`/chart/{genre}/tracks`,
+  `/playlist/{id}/tracks`, `/track/{id}`, `/track/isrc:{isrc}` and `/search`)
+  and from Apple (`rss.marketingtools.apple.com/…/most-played/50/songs.json` for
+  the country charts, `itunes.apple.com/lookup` and `/search` for previews). A
+  "From my listening" track is found on Deezer by ISRC, then by an
+  artist-and-title search accepted only when the normalized artist matches, then
+  on Apple; a track no service previews is skipped. Every call goes through one
+  module with an 8-second timeout, and a failed feed fails only that category.
+- **Caching.** A fetched track list stays in KV under `play:cat:{slug}` for six
+  hours, so a catalog round costs at most one service call — its own preview
+  lookup. Preview URLs are signed and expire, so they are resolved when a round
+  is served and never stored.
+- **State and scoring.** A game lives in KV under `play:game:{id}` for one hour:
+  the ordered candidates, the open round's served time and the results so far.
+  No D1 write happens per round. The server times a round from serving it to the
+  answer arriving; the client sends only the answer, never a score or a time. A
+  right answer scores 1,000 falling linearly to 100 over the 15 seconds, and a
+  wrong answer, a timeout or an answer to a finished or expired game scores 0.
+  Typed answers are compared through `normalizeText`, which folds case, accents,
+  punctuation, a "feat." credit and bracketed suffixes, plus a small edit
+  distance for typos. The answer never reaches the browser before it is guessed.
+- **Attribution.** Each reveal names the title and artist, shows the cover and
+  links to the track on Deezer or Apple Music with the service's name, which
+  both services require.
 
 ## 6. Limits and costs
 
