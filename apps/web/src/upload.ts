@@ -1,29 +1,13 @@
 import type { Context } from "hono";
 import * as v from "valibot";
-import { alignPage, type Alignment, type PagePair } from "./align";
-import { markDuplicates } from "./duplicates";
-import {
-  aliasInsertRows,
-  artistInsertRows,
-  bulkAliasSql,
-  bulkArtistSql,
-  bulkTrackSql,
-  resolveStoredPage,
-  type PageResolution,
-} from "./matching";
+import { ingestPage, type PageSource } from "./ingest";
 import type { Env } from "./types";
 
 const maxPlays = 1000;
 const uploadIntervalSeconds = 30;
 
-interface UploadSource {
+interface UploadSource extends PageSource {
   token_id: number;
-  id: number;
-  user_id: number;
-  status: string;
-  last_page: string | null;
-  play_seq: number;
-  gap_at: number | null;
   last_ok_at: number | null;
 }
 
@@ -78,29 +62,6 @@ const tokenSql = `
     AND sources.kind = 'ytmusic'
 `;
 
-const writePlaySql = `
-  INSERT OR IGNORE INTO plays (user_id, played_at, source_id, ref, track_id)
-  SELECT
-    json_extract(item.value, '$.userId'),
-    json_extract(item.value, '$.listenedAt'),
-    json_extract(item.value, '$.sourceId'),
-    json_extract(item.value, '$.ref'),
-    (SELECT id FROM tracks WHERE key = json_extract(item.value, '$.trackKey'))
-  FROM json_each(?1) AS item
-  WHERE (SELECT play_seq FROM sources WHERE id = ?2) = ?3
-`;
-
-const writeSourceSql = `
-  UPDATE sources SET
-    last_page = ?1,
-    play_seq = play_seq + ?2,
-    maybe_missing = maybe_missing + ?3,
-    status = ?4,
-    gap_at = ?5,
-    last_ok_at = ?6
-  WHERE id = ?7 AND play_seq = ?8
-`;
-
 const writeTokenSql = "UPDATE tokens SET last_used_at = ?1 WHERE id = ?2";
 
 function isRealDay(day: string) {
@@ -128,18 +89,18 @@ function refuse(context: Context, error: string, indexes: number[] = []) {
   );
 }
 
-function reply(
-  received: number,
-  inserted: number,
-  gap: boolean,
-  ambiguous: number,
-) {
+function reply(result: {
+  received: number;
+  inserted: number;
+  gap: boolean;
+  ambiguous: number;
+}) {
   return {
-    received,
-    inserted,
-    duplicate: received - inserted,
-    gap,
-    ambiguous,
+    received: result.received,
+    inserted: result.inserted,
+    duplicate: result.received - result.inserted,
+    gap: result.gap,
+    ambiguous: result.ambiguous,
   };
 }
 
@@ -211,101 +172,6 @@ async function readPlays(context: Context, now: number) {
   return failing.length > 0 ? refuse(context, "invalid plays", failing) : plays;
 }
 
-async function touchReplay(db: D1Database, source: UploadSource, now: number) {
-  await db.batch([
-    db
-      .prepare("UPDATE sources SET last_ok_at = ?1 WHERE id = ?2")
-      .bind(now, source.id),
-    db.prepare(writeTokenSql).bind(now, source.token_id),
-  ]);
-}
-
-function uploadListenedAt(play: UploadPlay) {
-  return Date.parse(`${play.day}T12:00:00.000Z`) / 1000;
-}
-
-function pageDayRange(plays: UploadPlay[]): [number, number] {
-  const times = plays.map(uploadListenedAt);
-  return [Math.min(...times), Math.max(...times)];
-}
-
-async function resolveUpload(
-  db: D1Database,
-  source: UploadSource,
-  added: UploadPlay[],
-): Promise<PageResolution> {
-  const inputs = added
-    .map((play) => ({
-      kind: "ytmusic",
-      sourceKey: play.video_id,
-      artist: play.artist,
-      title: play.title,
-      listenedAt: uploadListenedAt(play),
-      userId: source.user_id,
-      sourceId: source.id,
-    }))
-    .reverse();
-  const empty: PageResolution = { listens: [], newTracks: [] };
-  if (inputs.length === 0) return empty;
-  return resolveStoredPage(db, inputs, "ytmusic");
-}
-
-async function storeUpload(
-  db: D1Database,
-  source: UploadSource,
-  added: UploadPlay[],
-  alignment: Alignment,
-  pageJson: string,
-  now: number,
-) {
-  const { listens, newTracks } = await resolveUpload(db, source, added);
-
-  const statements: D1PreparedStatement[] = [];
-  if (newTracks.length > 0) {
-    statements.push(
-      db.prepare(bulkArtistSql).bind(artistInsertRows(newTracks)),
-      db.prepare(bulkTrackSql).bind(JSON.stringify(newTracks)),
-    );
-  }
-  let playsIndex = -1;
-  if (listens.length > 0) {
-    statements.push(
-      db.prepare(bulkAliasSql).bind(aliasInsertRows(listens), "ytmusic"),
-      db.prepare(writePlaySql).bind(
-        JSON.stringify(
-          listens.map((listen, index) => ({
-            ...listen,
-            ref: `${listen.sourceKey}#${source.play_seq + index + 1}`,
-          })),
-        ),
-        source.id,
-        source.play_seq,
-      ),
-    );
-    playsIndex = statements.length - 1;
-  }
-  const updateIndex = statements.length;
-  statements.push(
-    db
-      .prepare(writeSourceSql)
-      .bind(
-        pageJson,
-        listens.length,
-        alignment.ambiguous,
-        alignment.gap ? "gap" : "active",
-        alignment.gap ? now : source.gap_at,
-        now,
-        source.id,
-        source.play_seq,
-      ),
-    db.prepare(writeTokenSql).bind(now, source.token_id),
-  );
-
-  const results = await db.batch(statements);
-  if ((results[updateIndex]?.meta?.changes ?? 0) === 0) return null;
-  return { inserted: playsIndex >= 0 ? listens.length : 0, listens };
-}
-
 export async function uploadPlays(context: Context<{ Bindings: Env }>) {
   const badHeaders = checkHeaders(context);
   if (badHeaders) return badHeaders;
@@ -317,50 +183,18 @@ export async function uploadPlays(context: Context<{ Bindings: Env }>) {
   const plays = await readPlays(context, now);
   if (plays instanceof Response) return plays;
 
-  if (plays.length === 0) return context.json(reply(0, 0, false, 0), 200);
-
-  const pairs: PagePair[] = plays.map((play) => [play.day, play.video_id]);
-  const pageJson = JSON.stringify(pairs);
-  if (source.last_page === pageJson) {
-    await markDuplicates(
-      context.env.DB,
-      source.user_id,
-      ...pageDayRange(plays),
-    );
-    await touchReplay(context.env.DB, source, now);
+  if (plays.length === 0)
     return context.json(
-      reply(plays.length, 0, source.status === "gap", 0),
+      reply({ received: 0, inserted: 0, gap: false, ambiguous: 0 }),
       200,
     );
-  }
-  const previous =
-    source.last_page === null
-      ? null
-      : (JSON.parse(source.last_page) as PagePair[]);
-  const alignment = alignPage(previous, pairs);
-  const added = plays.slice(0, alignment.newCount);
-  const stored = await storeUpload(
-    context.env.DB,
-    source,
-    added,
-    alignment,
-    pageJson,
+
+  const db = context.env.DB;
+  const result = await ingestPage(db, source, plays, {
     now,
-  );
-  if (stored === null)
+    extra: [db.prepare(writeTokenSql).bind(now, source.token_id)],
+  });
+  if (result.raced)
     return context.json({ error: "two uploads raced; send again" }, 409);
-  const times =
-    stored.listens.length > 0
-      ? stored.listens.map((listen) => listen.listenedAt)
-      : pageDayRange(plays);
-  await markDuplicates(
-    context.env.DB,
-    source.user_id,
-    Math.min(...times),
-    Math.max(...times),
-  );
-  return context.json(
-    reply(plays.length, stored.inserted, alignment.gap, alignment.ambiguous),
-    200,
-  );
+  return context.json(reply(result), 200);
 }
