@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ensureSignedIn,
   extractJsonFromHtml,
+  fetchHistoryPage,
   HistoryPageError,
   parseHistoryJson,
   parseHistoryPage,
@@ -105,6 +106,19 @@ function shelf(title: string, contents: unknown[]) {
 }
 
 describe("history page extraction", () => {
+  it("fetches the history page as a desktop browser", async () => {
+    let sent: Headers | undefined;
+    const fetcher = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+      sent = new Headers(init?.headers);
+      return new Response("page");
+    }) as typeof fetch;
+    await fetchHistoryPage("__Secure-3PAPISID=fake", fetcher, now);
+    expect(sent?.get("user-agent")).toMatch(/^Mozilla\/5\.0 .*Chrome\//);
+    expect(sent?.get("authorization")).toMatch(
+      /^SAPISIDHASH \d+_[0-9a-f]{40}$/,
+    );
+  });
+
   it("detects a signed-out page", () => {
     expect(() => ensureSignedIn(signedOutPage())).toThrow(SignedOutError);
     expect(() => ensureSignedIn("<html></html>")).toThrow(HistoryPageError);

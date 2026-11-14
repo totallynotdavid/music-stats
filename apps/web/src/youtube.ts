@@ -1,5 +1,11 @@
 export const historyUrl = "https://music.youtube.com/history";
 
+// Without a browser User-Agent, music.youtube.com answers with a 2 KB stub
+// that has no initial data and no sign-in flag (measured 2026-11-14). This is
+// the agent the crate sends.
+const browserUserAgent =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
 const MARKER = "});ytcfg.set({'YTMUSIC_INITIAL_DATA': initialData});";
 const DATA_PREFIX = ", data: '";
 const DATA_SUFFIX = "'}";
@@ -53,6 +59,7 @@ export async function fetchHistoryPage(
     headers: {
       cookie: sanitizeCookie(cookie),
       authorization,
+      "user-agent": browserUserAgent,
     },
   });
   if (!response.ok)
