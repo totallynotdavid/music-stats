@@ -73,6 +73,24 @@ valibot to validate the upload body, vitest with
 `@cloudflare/vitest-pool-workers` so the tests run against real workerd and D1.
 Formatting and linting follow the repository: oxfmt and oxlint.
 
+### The component layer
+
+The pages are built from typed Hono JSX components in `src/ui/`: `Page` (the
+shell), `Section` (a card), `Stats`, `RankedList`, `PillLink` and `PillButton`,
+`Segmented`, `Notice`, `TokenDisplay`, `EmptyState` and `DayBars`. The route
+modules in `src/app.tsx` and `src/settings.tsx` compose them and hold no markup
+of their own. `Page` renders the header and footer; each other component has one
+job and takes typed props.
+
+Every visual value lives in `public/styles.css` as custom properties on `:root`:
+the neutral and accent colours in OKLCH, the type scale, the spacing scale,
+radii, shadows, easing and durations. Components read the tokens; the dark theme
+is a second set of the same names under `@media (prefers-color-scheme: dark)`,
+and `prefers-reduced-motion` turns every transition off. Inter is self-hosted as
+a variable woff2 in `public/` with its OFL licence. The only client script is
+the copy button on a freshly issued token and the export helper on the settings
+page; both are progressive enhancement over working markup.
+
 ## 2. Data model
 
 All times are Unix seconds in UTC. The schema is three migrations. A table holds
