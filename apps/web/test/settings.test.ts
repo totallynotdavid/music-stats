@@ -198,14 +198,16 @@ describe("profile", () => {
 });
 
 describe("sources", () => {
-  it("offers Connect Spotify and no ListenBrainz form", async () => {
+  it("offers Connect Spotify and a phone scrobbler section", async () => {
     await seedUser();
     const response = await get("/settings");
     expect(response.status).toBe(200);
     const body = await response.text();
     expect(body).toContain("/auth/spotify");
     expect(body).toContain("Connect Spotify");
-    expect(body).not.toContain("ListenBrainz");
+    expect(body).toContain("Phone scrobbler");
+    expect(body).toContain("Pano Scrobbler");
+    expect(body).toContain("server https://music.rising.sh");
     expect(body).not.toContain('action="/settings/sources"');
   });
 
@@ -309,7 +311,7 @@ describe("sources", () => {
 describe("upload tokens", () => {
   it("issues a token once and revokes it", async () => {
     await seedUser();
-    const response = await post("/settings/tokens", {});
+    const response = await post("/settings/tokens", { kind: "ytmusic" });
     expect(response.status).toBe(303);
     const issued = /__Host-issued-token=([^;]*)/.exec(
       response.headers.get("set-cookie") ?? "",
@@ -352,6 +354,79 @@ describe("upload tokens", () => {
       testEnv() as never,
     );
     expect(upload.status).toBe(401);
+  });
+});
+
+describe("scrobbler tokens", () => {
+  it("issues a token against a listenbrainz source and revokes it", async () => {
+    await seedUser();
+    const response = await post("/settings/tokens", { kind: "listenbrainz" });
+    expect(response.status).toBe(303);
+    const cookies = response.headers.get("set-cookie") ?? "";
+    const issued = /__Host-issued-token=([^;]*)/.exec(cookies)?.[1];
+    const shown = /msu_[A-Za-z0-9_-]{43}/.exec(issued ?? "")?.[0];
+    expect(shown).toBeTruthy();
+    expect(cookies).toContain("__Host-issued-token-kind=listenbrainz");
+
+    const source = await env.DB.prepare(
+      "SELECT id FROM sources WHERE user_id = 1 AND kind = 'listenbrainz'",
+    ).first<{ id: number }>();
+    expect(source).not.toBeNull();
+    const stored = await env.DB.prepare(
+      "SELECT hash, hint FROM tokens WHERE source_id = ?1",
+    )
+      .bind(source?.id)
+      .first<{ hash: Uint8Array; hint: string }>();
+    expect(stored?.hint).toBe(shown?.slice(-4));
+    expect(new Uint8Array(stored?.hash ?? [])).toEqual(await sha256(shown!));
+
+    const page = await get("/settings", {
+      cookie: `__Host-session=${session}; __Host-issued-token=${issued}; __Host-issued-token-kind=listenbrainz`,
+    });
+    const body = await page.text();
+    expect(body).toContain(shown!);
+    expect(body).toContain("scrobbler token");
+
+    const valid = await app.fetch(
+      new Request(`${origin}/1/validate-token`, {
+        headers: { authorization: `Token ${shown}` },
+      }),
+      testEnv() as never,
+    );
+    expect((await valid.json<{ valid: boolean }>()).valid).toBe(true);
+
+    const tokenRow = await env.DB.prepare(
+      "SELECT id FROM tokens WHERE source_id = ?1",
+    )
+      .bind(source?.id)
+      .first<{ id: number }>();
+    await post("/settings/tokens/revoke", { id: String(tokenRow?.id) });
+    const revoked = await app.fetch(
+      new Request(`${origin}/1/validate-token`, {
+        headers: { authorization: `Token ${shown}` },
+      }),
+      testEnv() as never,
+    );
+    expect(revoked.status).toBe(401);
+  });
+
+  it("removing the source deletes its plays and tokens", async () => {
+    await seedUser();
+    await env.DB.prepare(
+      "INSERT INTO sources (id, user_id, kind) VALUES (12, 1, 'listenbrainz')",
+    ).run();
+    await seedPlays(1, 12);
+    await env.DB.prepare(
+      "INSERT INTO tokens (source_id, hash, hint, created_at) VALUES (12, ?1, 'abcd', ?2)",
+    )
+      .bind(await sha256("msu_x"), now)
+      .run();
+
+    const response = await post("/settings/sources/remove", { id: "12" });
+    expect(response.status).toBe(303);
+    expect(await count("plays", "source_id = 12")).toBe(0);
+    expect(await count("sources", "id = 12")).toBe(0);
+    expect(await count("tokens")).toBe(0);
   });
 });
 
