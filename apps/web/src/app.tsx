@@ -14,6 +14,7 @@ import { Segmented } from "./ui/segmented";
 import { Page } from "./ui/shell";
 import { Stats } from "./ui/stat";
 import { submitListens, validateToken } from "./listenbrainz";
+import { partyRoute } from "./party";
 import { settingsApp, signInPage } from "./settings";
 import { beginSpotify, spotifyCallback } from "./spotify";
 import { playApp } from "./play/routes";
@@ -126,11 +127,16 @@ function profilePage(
     ),
     account: <a href="/settings">Account</a>,
     footer: (
-      <a
-        href={`/u/${encodeURIComponent(snapshot.user.name)}.json?period=${snapshot.period}`}
-      >
-        Data as JSON
-      </a>
+      <>
+        <a
+          href={`/u/${encodeURIComponent(snapshot.user.name)}.json?period=${snapshot.period}`}
+        >
+          Data as JSON
+        </a>
+        <a href={`/party?u=${encodeURIComponent(snapshot.user.name)}`}>
+          Make a party playlist with {snapshot.user.name}
+        </a>
+      </>
     ),
     children: (
       <>
@@ -265,6 +271,8 @@ app.get("/auth/spotify/callback", (context) => spotifyCallback(context));
 app.route("/settings", settingsApp);
 
 app.route("/play", playApp);
+
+app.get("/party", partyRoute);
 
 app.get("/u/:path", async (context) => {
   const path = context.req.param("path") ?? "";
