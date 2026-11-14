@@ -2,9 +2,11 @@ declare namespace Cloudflare {
   interface Env {
     DB: D1Database;
     CACHE: KVNamespace;
-    LISTENBRAINZ_BASE_URL: string;
     GITHUB_CLIENT_ID?: string;
     GITHUB_CLIENT_SECRET?: string;
+    SPOTIFY_CLIENT_ID?: string;
+    SPOTIFY_CLIENT_SECRET?: string;
+    SPOTIFY_ENCRYPTION_KEY?: string;
   }
 }
 

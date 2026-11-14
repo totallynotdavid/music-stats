@@ -8,6 +8,7 @@ import { pullDueSources } from "./cron";
 import { page } from "./layout";
 import { sourceNames } from "./names";
 import { settingsApp, signInPage } from "./settings";
+import { beginSpotify, spotifyCallback } from "./spotify";
 import { uploadPlays } from "./upload";
 
 const periods: Period[] = ["week", "month", "all"];
@@ -262,6 +263,10 @@ app.get("/", async (context) => {
 app.get("/auth/github", (context) => beginGithub(context));
 
 app.get("/auth/github/callback", (context) => githubCallback(context));
+
+app.get("/auth/spotify", (context) => beginSpotify(context));
+
+app.get("/auth/spotify/callback", (context) => spotifyCallback(context));
 
 app.route("/settings", settingsApp);
 

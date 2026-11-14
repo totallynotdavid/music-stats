@@ -1,10 +1,10 @@
-import { pullListenBrainz } from "./listenbrainz";
 import {
   dailyLimitPattern,
   maxSourcesPerPull,
   nextPullDelay,
   nextUtcMidnight,
 } from "./pull";
+import { pullSpotify } from "./spotify";
 import type { Env, SourceRow } from "./types";
 
 const d1CapKey = "d1-capped";
@@ -13,8 +13,7 @@ const pulls: Record<
   string,
   (env: Env, source: SourceRow, now: number) => Promise<unknown>
 > = {
-  listenbrainz: (env, source, now) =>
-    pullListenBrainz(env, source, undefined, now),
+  spotify: (env, source, now) => pullSpotify(env, source, undefined, now),
 };
 
 export async function pullDueSources(
@@ -25,10 +24,10 @@ export async function pullDueSources(
   let result;
   try {
     result = await env.DB.prepare(
-      `SELECT id, user_id, kind, account, cursor, backfill_before, gap_before,
-       gap_floor, next_pull_at, idle_pulls
+      `SELECT id, user_id, kind, account, secret, cursor, backfill_before,
+       gap_before, gap_floor, next_pull_at, idle_pulls
        FROM sources WHERE next_pull_at IS NOT NULL AND next_pull_at <= ?1
-       AND kind = 'listenbrainz'
+       AND kind = 'spotify'
        ORDER BY next_pull_at, id LIMIT ${maxSourcesPerPull}`,
     )
       .bind(now)

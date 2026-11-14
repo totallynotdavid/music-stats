@@ -95,9 +95,9 @@ export function signInPage() {
         <div class="page-head">
           <h1>Sign in</h1>
           <p>
-            Music stats stores the plays you connect from ListenBrainz and
-            YouTube Music. It shows your top tracks, top artists and plays per
-            day on a public page at <code>/u/name</code>.
+            Music stats stores the plays you connect from Spotify and YouTube
+            Music. It shows your top tracks, top artists and plays per day on a
+            public page at <code>/u/name</code>.
           </p>
         </div>
         <div class="stack">
@@ -225,9 +225,7 @@ function settingsPage(
           </div>
           <div class="section-body">
             {sources.length === 0 ? (
-              <p class="muted">
-                No sources connected. Add a ListenBrainz account below.
-              </p>
+              <p class="muted">No sources connected.</p>
             ) : (
               <ul class="rows">
                 {sources.map((source) => (
@@ -250,27 +248,14 @@ function settingsPage(
                 ))}
               </ul>
             )}
-            <form method="post" action="/settings/sources" class="form-row">
-              <div class="field">
-                <label for="source-account">ListenBrainz username</label>
-                {fieldError("source")}
-                <input
-                  id="source-account"
-                  name="account"
-                  type="text"
-                  required
-                  spellcheck={false}
-                  autocomplete="off"
-                  {...invalid("source")}
-                />
-              </div>
-              <div class="field actions">
-                <button type="submit">Connect source</button>
-              </div>
-            </form>
+            <div>
+              <a class="button" href="/auth/spotify">
+                Connect Spotify
+              </a>
+            </div>
             <small class="hint">
-              The service reads the public listen history of the account you
-              name.
+              Spotify asks you to approve read access to your recently played
+              tracks, then the service pulls them every few minutes.
             </small>
           </div>
         </section>
@@ -546,39 +531,6 @@ settingsApp.post("/profile", async (context) => {
       context,
       data,
       { error: `The name ${name} is taken.`, field: "name" },
-      400,
-    );
-  }
-  return context.redirect("/settings", 303);
-});
-
-settingsApp.post("/sources", async (context) => {
-  const user = context.get("user");
-  const account = await form(context, "account");
-  const data = await pageData(context);
-  if (!/^\S{1,100}$/.test(account))
-    return render(
-      context,
-      data,
-      { error: "Enter the ListenBrainz username.", field: "source" },
-      400,
-    );
-  const now = Math.floor(Date.now() / 1000);
-  try {
-    await context.env.DB.prepare(
-      `INSERT INTO sources (user_id, kind, account, next_pull_at)
-       VALUES (?1, 'listenbrainz', ?2, ?3)`,
-    )
-      .bind(user.id, account, now)
-      .run();
-  } catch {
-    return render(
-      context,
-      data,
-      {
-        error: "A ListenBrainz source is already connected.",
-        field: "source",
-      },
       400,
     );
   }

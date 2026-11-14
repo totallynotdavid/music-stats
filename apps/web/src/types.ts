@@ -3,9 +3,11 @@ export type Period = "week" | "month" | "all";
 export interface Env {
   DB: D1Database;
   CACHE?: KVNamespace;
-  LISTENBRAINZ_BASE_URL?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
+  SPOTIFY_CLIENT_ID?: string;
+  SPOTIFY_CLIENT_SECRET?: string;
+  SPOTIFY_ENCRYPTION_KEY?: string;
 }
 
 export interface SourceRow {
@@ -13,12 +15,15 @@ export interface SourceRow {
   user_id: number;
   kind: string;
   account: string | null;
+  secret?: ArrayBuffer | Uint8Array | null;
   cursor: number | null;
   backfill_before: number | null;
   gap_before: number | null;
   gap_floor: number | null;
   next_pull_at: number | null;
   idle_pulls: number;
+  status?: string;
+  error?: string | null;
   play_count?: number;
 }
 
