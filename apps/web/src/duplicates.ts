@@ -3,11 +3,9 @@ export const pairWindowSeconds = 600;
 
 const sourceRank = new Map<string, number>([
   ["spotify", 0],
-  ["spotify_import", 1],
-  ["listenbrainz", 2],
-  ["lastfm", 3],
-  ["ytmusic_import", 4],
-  ["ytmusic", 5],
+  ["listenbrainz", 1],
+  ["lastfm", 2],
+  ["ytmusic", 3],
 ]);
 
 interface PlayRow {

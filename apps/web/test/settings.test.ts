@@ -227,11 +227,11 @@ describe("sources", () => {
     expect(await (await get("/settings")).text()).toContain("rob");
   });
 
-  it("marks a Last.fm source as waiting while approval is empty", async () => {
+  it("marks a Last.fm source as paused while approval is empty", async () => {
     await seedUser();
     await post("/settings/sources", { kind: "lastfm", account: "fm-user" });
     const body = await (await get("/settings")).text();
-    expect(body).toContain("waiting for Last.fm approval");
+    expect(body).toContain("fm-user · paused");
   });
 
   it("removes a source and recounts all three totals", async () => {

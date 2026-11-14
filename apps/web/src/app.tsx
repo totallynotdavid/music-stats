@@ -310,11 +310,19 @@ app.get("/u/:path", async (context) => {
       ? context.json({ error: "not found" }, 404)
       : context.text("Not found", 404);
   const user = await findUser(context.env.DB, name);
-  if (!user || (user.has_lastfm === 1 && !context.env.LASTFM_APPROVAL))
+  if (!user)
     return format === "json"
       ? context.json({ error: "not found" }, 404)
       : context.text("Not found", 404);
-  const lastFm = user.has_lastfm === 1;
+  // Without approval the cron never pulls Last.fm, so the page holds no
+  // Last.fm data and names no Last.fm source (Last.fm API terms, clause 2.7).
+  const lastFm = user.has_lastfm === 1 && Boolean(context.env.LASTFM_APPROVAL);
+  const kinds = lastFm
+    ? user.kinds
+    : user.kinds
+        ?.split(",")
+        .filter((kind) => kind !== "lastfm")
+        .join(",") || null;
   const snapshot = await getSnapshot(
     context.env,
     user,
@@ -324,12 +332,7 @@ app.get("/u/:path", async (context) => {
   if (format === "html") {
     if (lastFm) context.header("Cache-Control", "public, max-age=60");
     return context.html(
-      profilePage(
-        snapshot,
-        new URL(context.req.url).origin,
-        user.kinds,
-        lastFm,
-      ),
+      profilePage(snapshot, new URL(context.req.url).origin, kinds, lastFm),
     );
   }
   context.header(

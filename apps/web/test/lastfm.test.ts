@@ -88,7 +88,7 @@ afterEach(() => {
 });
 
 describe("the Last.fm launch gate", () => {
-  it("with LASTFM_APPROVAL empty answers 404 on the three addresses and stores no play", async () => {
+  it("with LASTFM_APPROVAL empty stores no play and serves the profile without Last.fm", async () => {
     await seedUser();
     const liveFetch = vi
       .spyOn(globalThis, "fetch")
@@ -96,10 +96,17 @@ describe("the Last.fm launch gate", () => {
     await pullDueSources(env, now);
     expect(liveFetch).not.toHaveBeenCalled();
     expect(await count("plays")).toBe(0);
-    for (const path of ["/u/alice", "/u/alice.json", "/u/alice.svg"]) {
-      const response = await SELF.fetch(`https://music.rising.sh${path}`);
-      expect(response.status).toBe(404);
-    }
+    const page = await SELF.fetch("https://music.rising.sh/u/alice");
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).not.toContain("Last.fm");
+    expect(html).not.toContain("AudioScrobbler");
+    const json = await SELF.fetch("https://music.rising.sh/u/alice.json");
+    expect(json.status).toBe(200);
+    expect(await json.json()).not.toHaveProperty("credit");
+    const card = await SELF.fetch("https://music.rising.sh/u/alice.svg");
+    expect(card.status).toBe(200);
+    expect(await card.text()).not.toContain("AudioScrobbler");
   });
 
   it("with LASTFM_APPROVAL set serves the three addresses, each with the credit and a one-minute bound", async () => {

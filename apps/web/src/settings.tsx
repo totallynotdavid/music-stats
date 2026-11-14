@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { bodyLimit } from "hono/body-limit";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { csrf } from "hono/csrf";
 import {
@@ -15,10 +14,8 @@ import {
 import { page } from "./layout";
 import { sourceNames } from "./names";
 import type { Env } from "./types";
-import { importPlays, importRemove } from "./import";
 
 const exportPageSize = 1000;
-const importBodyLimit = 1024 * 1024;
 
 const exportScript = `
 const exportAll = document.getElementById("export-all");
@@ -73,19 +70,13 @@ interface ExportRow {
 
 const sourceKinds = ["listenbrainz", "lastfm"] as const;
 
-const importSourceNames: Record<string, string> = {
-  spotify_import: "spotify",
-  ytmusic_import: "ytmusic",
-};
-
 function dayText(timestamp: number | null) {
   if (timestamp === null) return "never";
   return new Date(timestamp * 1000).toISOString().slice(0, 10);
 }
 
 function sourceStatus(source: SourceInfo, lastFmApproved: boolean) {
-  if (source.kind === "lastfm" && !lastFmApproved)
-    return "waiting for Last.fm approval";
+  if (source.kind === "lastfm" && !lastFmApproved) return "paused";
   if (source.status === "gap")
     return "uploads lost touch; plays between the last aligned upload and the next one may be missing";
   if (source.status === "error")
@@ -155,12 +146,6 @@ function settingsPage(
     <p class="form-error" role="alert">
       <b>Error:</b> {error}
     </p>
-  );
-  const pulledSources = sources.filter(
-    (source) => !(source.kind in importSourceNames),
-  );
-  const importedSources = sources.filter(
-    (source) => source.kind in importSourceNames,
   );
   return page({
     title: "Settings",
@@ -242,14 +227,14 @@ function settingsPage(
             <h2>Sources</h2>
           </div>
           <div class="section-body">
-            {pulledSources.length === 0 ? (
+            {sources.length === 0 ? (
               <p class="muted">
                 No sources connected. Add a ListenBrainz or Last.fm account
                 below.
               </p>
             ) : (
               <ul class="rows">
-                {pulledSources.map((source) => (
+                {sources.map((source) => (
                   <li key={source.id}>
                     <span class="track">
                       <b>{sourceNames[source.kind] ?? source.kind}</b>
@@ -335,50 +320,6 @@ function settingsPage(
             <form method="post" action="/settings/tokens">
               <button type="submit">Issue a new token</button>
             </form>
-          </div>
-        </section>
-        <section class="section">
-          <div class="section-head">
-            <h2>Import history</h2>
-          </div>
-          <div class="section-body">
-            <p class="muted">
-              Import Spotify extended streaming history or the watch history of
-              a Google Takeout export. The browser reads the files and sends the
-              plays in small batches. The files stay on this device.
-            </p>
-            <div class="field">
-              <label for="import-files">History files</label>
-              <small>
-                JSON files only. Unzip the export first. A Spotify file is a
-                Streaming_History_Audio file. A Takeout file is
-                watch-history.json.
-              </small>
-              <input id="import-files" type="file" accept=".json" multiple />
-            </div>
-            <div>
-              <button id="import-start" type="button">
-                Start the import
-              </button>
-            </div>
-            <p id="import-status" role="status"></p>
-            <ul class="rows" id="import-sources">
-              {importedSources.map((source) => (
-                <li key={source.id}>
-                  <span class="track">
-                    <b>{sourceNames[source.kind] ?? source.kind}</b>
-                    <small>last batch {dayText(source.last_ok_at)}</small>
-                  </span>
-                  <button
-                    type="button"
-                    data-import-remove={importSourceNames[source.kind]}
-                  >
-                    Remove
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <script type="module" src="/import.js"></script>
           </div>
         </section>
         <section class="section">
@@ -718,21 +659,6 @@ settingsApp.post("/tokens", async (context) => {
   });
   return context.redirect("/settings", 303);
 });
-
-const tooLarge = (context: SettingsContext) =>
-  context.json({ error: "the body is over the 1 MiB limit" }, 413);
-
-settingsApp.post(
-  "/import",
-  bodyLimit({ maxSize: importBodyLimit, onError: tooLarge }),
-  importPlays,
-);
-
-settingsApp.post(
-  "/import/remove",
-  bodyLimit({ maxSize: importBodyLimit, onError: tooLarge }),
-  importRemove,
-);
 
 settingsApp.post("/tokens/revoke", async (context) => {
   const user = context.get("user");

@@ -138,8 +138,8 @@ curl -i 'https://music.rising.sh/u/alice.json?period=week'
 
 ## Add a Last.fm source
 
-Last.fm data is behind a launch gate: the cron does not pull it and the profile
-answers `404` until `LASTFM_APPROVAL` in
+Last.fm data is behind a launch gate: the cron does not pull it, and the profile
+shows only the user's other sources, until `LASTFM_APPROVAL` in
 [`apps/web/wrangler.jsonc`](../apps/web/wrangler.jsonc) is set. It stays empty
 until Last.fm approves the service in writing. Do not set it without that
 approval.
@@ -160,9 +160,9 @@ npx wrangler d1 execute music-stats --remote --command \
    VALUES ((SELECT id FROM users WHERE name = 'alice'), 'lastfm', 'alice-fm', unixepoch());"
 ```
 
-The source account is the public Last.fm username. Until approval arrives the
-user's three addresses answer `404`; after it is set and deployed the pages are
-served and the profile carries the AudioScrobbler credit.
+The source account is the public Last.fm username. After approval is set and
+deployed, the cron pulls the source and the profile names Last.fm and carries
+the AudioScrobbler credit.
 
 ## Add a YouTube Music upload token
 
