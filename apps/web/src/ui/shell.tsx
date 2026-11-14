@@ -8,13 +8,20 @@ interface PageOptions {
   children: Child;
 }
 
-export function page({ title, head, account, footer, children }: PageOptions) {
+export function Page({ title, head, account, footer, children }: PageOptions) {
   return (
     <html lang="en">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         {head}
+        <link
+          rel="preload"
+          href="/inter-latin.woff2"
+          as="font"
+          type="font/woff2"
+          crossorigin="anonymous"
+        />
         <link rel="stylesheet" href="/styles.css" />
         <title>{`${title} · Music stats`}</title>
       </head>

@@ -5,8 +5,14 @@ import { getStats } from "./aggregate";
 import { beginGithub, githubCallback, sessionUser } from "./auth";
 import { renderCard, type CardTheme } from "./card";
 import { pullDueSources } from "./cron";
-import { page } from "./layout";
 import { sourceNames } from "./names";
+import { DayBars } from "./ui/bars";
+import { EmptyState } from "./ui/empty";
+import { RankedList } from "./ui/ranked";
+import { Section } from "./ui/section";
+import { Segmented } from "./ui/segmented";
+import { Page } from "./ui/shell";
+import { Stats } from "./ui/stat";
 import { submitListens, validateToken } from "./listenbrainz";
 import { settingsApp, signInPage } from "./settings";
 import { beginSpotify, spotifyCallback } from "./spotify";
@@ -87,24 +93,6 @@ const periodNames: Record<Period, string> = {
 
 const dailyBars = 30;
 
-function list(items: Array<{ title: string; artist: string; plays: number }>) {
-  if (items.length === 0) return <p class="muted">No plays in this period.</p>;
-  return (
-    <ol>
-      {items.map((item, index) => (
-        <li key={`${item.title}-${item.artist}`}>
-          <span class="rank">{index + 1}</span>
-          <span class="track">
-            <b>{item.title}</b>
-            {item.artist !== "" && <small>{item.artist}</small>}
-          </span>
-          <span class="count">{item.plays}</span>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
 function sourceLine(kinds: string | null) {
   const names = new Set(
     (kinds?.split(",") ?? []).map((kind) => sourceNames[kind] ?? kind),
@@ -118,14 +106,13 @@ function profilePage(
   kinds: string | null,
 ) {
   const days = snapshot.daily.slice(-dailyBars);
-  const maxDaily = Math.max(1, ...days.map((day) => day.plays));
   const cardUrl = `${origin}/u/${encodeURIComponent(snapshot.user.name)}.svg`;
   const updated = new Date(snapshot.updated_at * 1000)
     .toISOString()
     .slice(0, 16)
     .replace("T", " ");
   const periodNote = periodNames[snapshot.period];
-  return page({
+  return Page({
     title: snapshot.user.name,
     head: (
       <>
@@ -156,89 +143,72 @@ function profilePage(
             .
           </p>
         </div>
-        <nav class="segmented" aria-label="Time period">
-          {periods.map((period) => (
-            <a
-              href={`?period=${period}`}
-              aria-current={snapshot.period === period ? "page" : undefined}
+        <Segmented
+          label="Time period"
+          options={periods.map((period) => ({
+            label: periodNames[period],
+            href: `?period=${period}`,
+            current: snapshot.period === period,
+          }))}
+        />
+        <Stats
+          items={[
+            { label: "Plays", value: snapshot.plays },
+            { label: "Tracks", value: snapshot.unique_tracks },
+            { label: "Artists", value: snapshot.unique_artists },
+          ]}
+        />
+        {snapshot.plays === 0 ? (
+          <EmptyState
+            title="No plays in this period"
+            body="Plays appear here once a connected source reports them. Try a longer period."
+          />
+        ) : (
+          <>
+            <Section title="Top tracks" aside={periodNote}>
+              <RankedList
+                items={snapshot.top_tracks.map((item) => ({
+                  title: item.title,
+                  subtitle: item.artist,
+                  plays: item.plays,
+                }))}
+              />
+            </Section>
+            <Section title="Top artists" aside={periodNote}>
+              <RankedList
+                items={snapshot.top_artists.map((item) => ({
+                  title: item.artist,
+                  plays: item.plays,
+                }))}
+              />
+            </Section>
+            <Section
+              title="Plays per day"
+              aside={
+                snapshot.daily.length > dailyBars
+                  ? `Latest ${dailyBars} days with plays, UTC`
+                  : "Days with plays, UTC"
+              }
             >
-              {periodNames[period]}
-            </a>
-          ))}
-        </nav>
-        <dl class="stats">
-          <div>
-            <dt>Plays</dt>
-            <dd>{snapshot.plays}</dd>
-          </div>
-          <div>
-            <dt>Tracks</dt>
-            <dd>{snapshot.unique_tracks}</dd>
-          </div>
-          <div>
-            <dt>Artists</dt>
-            <dd>{snapshot.unique_artists}</dd>
-          </div>
-        </dl>
-        <section class="section">
-          <div class="section-head">
-            <h2>Top tracks</h2>
-            <small>{periodNote}</small>
-          </div>
-          <div class="section-body">{list(snapshot.top_tracks)}</div>
-        </section>
-        <section class="section">
-          <div class="section-head">
-            <h2>Top artists</h2>
-            <small>{periodNote}</small>
-          </div>
-          <div class="section-body">
-            {list(
-              snapshot.top_artists.map((item) => ({
-                title: item.artist,
-                artist: "",
-                plays: item.plays,
-              })),
-            )}
-          </div>
-        </section>
-        <section class="section">
-          <div class="section-head">
-            <h2>Plays per day</h2>
-            <small>
-              {snapshot.daily.length > dailyBars
-                ? `Latest ${dailyBars} days with plays, UTC`
-                : "Days with plays, UTC"}
-            </small>
-          </div>
-          <div class="section-body">
-            {days.length === 0 ? (
-              <p class="muted">No plays in this period.</p>
-            ) : (
-              <>
-                <div
-                  class="daily"
-                  role="img"
-                  aria-label={`Plays per day from ${days[0]!.day} to ${days[days.length - 1]!.day}, at most ${maxDaily} a day`}
-                >
-                  {days.map((day) => (
-                    <span
-                      class="bar"
-                      key={day.day}
-                      style={`height: ${(day.plays / maxDaily) * 100}%`}
-                      title={`${day.day}: ${day.plays} plays`}
-                    />
-                  ))}
-                </div>
-                <div class="axis">
-                  <span>{days[0]!.day}</span>
-                  <span>{days[days.length - 1]!.day}</span>
-                </div>
-              </>
-            )}
-          </div>
-        </section>
+              <DayBars days={days} />
+            </Section>
+          </>
+        )}
       </>
+    ),
+  });
+}
+
+export function notFoundPage() {
+  return Page({
+    title: "Not found",
+    children: (
+      <EmptyState
+        title="Page not found"
+        body="The page you asked for does not exist."
+        action={{ href: "/", label: "Back to the start page" }}
+        heading="h1"
+      />
     ),
   });
 }
@@ -323,12 +293,12 @@ app.get("/u/:path", async (context) => {
   if (!name)
     return format === "json"
       ? context.json({ error: "not found" }, 404)
-      : context.text("Not found", 404);
+      : context.html(notFoundPage(), 404);
   const user = await findUser(context.env.DB, name);
   if (!user)
     return format === "json"
       ? context.json({ error: "not found" }, 404)
-      : context.text("Not found", 404);
+      : context.html(notFoundPage(), 404);
   const snapshot = await getSnapshot(
     context.env,
     user,
@@ -353,7 +323,7 @@ app.get("/u/:path", async (context) => {
   return context.json(snapshot);
 });
 
-app.notFound((context) => context.text("Not found", 404));
+app.notFound((context) => context.html(notFoundPage(), 404));
 
 export async function scheduled(_controller: ScheduledController, env: Env) {
   await pullDueSources(env);

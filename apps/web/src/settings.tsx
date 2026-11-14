@@ -11,9 +11,13 @@ import {
   validName,
   type SignedInUser,
 } from "./auth";
-import { page } from "./layout";
 import { sourceNames } from "./names";
 import type { Env } from "./types";
+import { Notice } from "./ui/notice";
+import { PillButton, PillLink } from "./ui/pill";
+import { Section } from "./ui/section";
+import { Page } from "./ui/shell";
+import { TokenDisplay } from "./ui/token";
 
 const exportPageSize = 1000;
 
@@ -89,7 +93,7 @@ function sourceNote(source: SourceInfo) {
 }
 
 export function signInPage() {
-  return page({
+  return Page({
     title: "Sign in",
     children: (
       <>
@@ -103,9 +107,9 @@ export function signInPage() {
         </div>
         <div class="stack">
           <div>
-            <a class="button primary" href="/auth/github">
+            <PillLink href="/auth/github" variant="primary">
               Sign in with GitHub
-            </a>
+            </PillLink>
           </div>
           <p class="hint">
             Profiles are public until you hide them in settings.
@@ -151,7 +155,7 @@ function settingsPage(
           </span>
           <form method="post" action="/settings/tokens/revoke">
             <input type="hidden" name="id" value={token.id} />
-            <button type="submit">Revoke</button>
+            <PillButton small>Revoke</PillButton>
           </form>
         </li>
       ))}
@@ -172,7 +176,7 @@ function settingsPage(
       <b>Error:</b> {error}
     </p>
   );
-  return page({
+  return Page({
     title: "Settings",
     account: (
       <>
@@ -192,22 +196,89 @@ function settingsPage(
             Signed in as <b>{user.name}</b>.
           </p>
         </div>
-        {notice !== undefined && <p class="notice">{notice}</p>}
+        {notice !== undefined && <Notice>{notice}</Notice>}
         {topError}
         {issuedToken !== undefined && (
-          <section class="notice" aria-label="New token">
+          <div class="notice" aria-label="New token">
             <p>
               Your new {issuedKind === "listenbrainz" ? "scrobbler" : "upload"}{" "}
               token. It is shown once. Store it now.
             </p>
-            <code class="token">{issuedToken}</code>
-          </section>
-        )}
-        <section class="section">
-          <div class="section-head">
-            <h2>Profile</h2>
+            <TokenDisplay token={issuedToken} />
           </div>
-          <form class="section-body" method="post" action="/settings/profile">
+        )}
+        <Section title="Sources">
+          {sources.length === 0 ? (
+            <p class="muted">No sources connected.</p>
+          ) : (
+            <ul class="rows">
+              {sources.map((source) => (
+                <li key={source.id}>
+                  <span class="track">
+                    <b>{sourceNames[source.kind] ?? source.kind}</b>
+                    <small>
+                      {source.account ??
+                        (source.kind === "ytmusic"
+                          ? "upload token"
+                          : "scrobbler token")}{" "}
+                      · {sourceStatus(source)}
+                      {sourceNote(source) !== null && (
+                        <> · {sourceNote(source)}</>
+                      )}
+                    </small>
+                  </span>
+                  <form method="post" action="/settings/sources/remove">
+                    <input type="hidden" name="id" value={source.id} />
+                    <PillButton small>Remove</PillButton>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+        <Section title="YouTube Music uploads">
+          {uploadTokens.length === 0 ? (
+            <p class="muted">
+              No upload token. Issue one and store it as UPLOAD_TOKEN in your
+              GitHub Action's secrets.
+            </p>
+          ) : (
+            tokenList(uploadTokens)
+          )}
+          <form method="post" action="/settings/tokens">
+            <input type="hidden" name="kind" value="ytmusic" />
+            <PillButton>Issue a new token</PillButton>
+          </form>
+        </Section>
+        <Section title="Phone scrobbler">
+          <p class="muted">
+            Install Pano Scrobbler on your Android phone.
+            <br />
+            Add a ListenBrainz account with server {origin} and this token.
+            <br />
+            Every play your phone reports appears on your profile.
+          </p>
+          {scrobblerTokens.length === 0 ? (
+            <p class="muted">No scrobbler token.</p>
+          ) : (
+            tokenList(scrobblerTokens)
+          )}
+          <form method="post" action="/settings/tokens">
+            <input type="hidden" name="kind" value="listenbrainz" />
+            <PillButton>Issue a new token</PillButton>
+          </form>
+        </Section>
+        <Section title="Spotify">
+          <div>
+            <PillLink href="/auth/spotify">Connect Spotify</PillLink>
+          </div>
+          <small class="hint">
+            Spotify asks you to approve read access to your recently played
+            tracks, then the service pulls them every few minutes.
+          </small>
+        </Section>
+        <Section title="Account">
+          <form method="post" action="/settings/profile" class="stack">
             <div class="field">
               <label for="name">Profile name</label>
               <small>
@@ -244,128 +315,30 @@ function settingsPage(
               </small>
             </div>
             <div>
-              <button class="primary" type="submit">
-                Save profile
-              </button>
+              <PillButton variant="primary">Save profile</PillButton>
             </div>
           </form>
-        </section>
-        <section class="section">
-          <div class="section-head">
-            <h2>Sources</h2>
+          <p class="muted">
+            Download your plays as NDJSON, one play per line. Without JavaScript
+            the link returns the first 1,000 plays. The Link header of each page
+            points at the next.
+          </p>
+          <div>
+            <PillLink
+              href="/settings/export"
+              id="export-all"
+              dataName={user.name}
+            >
+              Download your plays
+            </PillLink>
           </div>
-          <div class="section-body">
-            {sources.length === 0 ? (
-              <p class="muted">No sources connected.</p>
-            ) : (
-              <ul class="rows">
-                {sources.map((source) => (
-                  <li key={source.id}>
-                    <span class="track">
-                      <b>{sourceNames[source.kind] ?? source.kind}</b>
-                      <small>
-                        {source.account ??
-                          (source.kind === "ytmusic"
-                            ? "upload token"
-                            : "scrobbler token")}{" "}
-                        · {sourceStatus(source)}
-                        {sourceNote(source) !== null && (
-                          <> · {sourceNote(source)}</>
-                        )}
-                      </small>
-                    </span>
-                    <form method="post" action="/settings/sources/remove">
-                      <input type="hidden" name="id" value={source.id} />
-                      <button type="submit">Remove</button>
-                    </form>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div>
-              <a class="button" href="/auth/spotify">
-                Connect Spotify
-              </a>
-            </div>
-            <small class="hint">
-              Spotify asks you to approve read access to your recently played
-              tracks, then the service pulls them every few minutes.
-            </small>
-          </div>
-        </section>
-        <section class="section">
-          <div class="section-head">
-            <h2>YouTube Music uploads</h2>
-          </div>
-          <div class="section-body">
-            {uploadTokens.length === 0 ? (
-              <p class="muted">
-                No upload token. Issue one and store it as UPLOAD_TOKEN in your
-                GitHub Action's secrets.
-              </p>
-            ) : (
-              tokenList(uploadTokens)
-            )}
-            <form method="post" action="/settings/tokens">
-              <input type="hidden" name="kind" value="ytmusic" />
-              <button type="submit">Issue a new token</button>
-            </form>
-          </div>
-        </section>
-        <section class="section">
-          <div class="section-head">
-            <h2>Phone scrobbler</h2>
-          </div>
-          <div class="section-body">
-            <p class="muted">
-              Install Pano Scrobbler on your Android phone.
-              <br />
-              Add a ListenBrainz account with server {origin} and this token.
-              <br />
-              Every play your phone reports appears on your profile.
-            </p>
-            {scrobblerTokens.length === 0 ? (
-              <p class="muted">No scrobbler token.</p>
-            ) : (
-              tokenList(scrobblerTokens)
-            )}
-            <form method="post" action="/settings/tokens">
-              <input type="hidden" name="kind" value="listenbrainz" />
-              <button type="submit">Issue a new token</button>
-            </form>
-          </div>
-        </section>
-        <section class="section">
-          <div class="section-head">
-            <h2>Export</h2>
-          </div>
-          <div class="section-body">
-            <p class="muted">
-              Download your plays as NDJSON, one play per line. Without
-              JavaScript the link returns the first 1,000 plays. The Link header
-              of each page points at the next.
-            </p>
-            <div>
-              <a
-                class="button"
-                id="export-all"
-                href="/settings/export"
-                data-name={user.name}
-              >
-                Download your plays
-              </a>
-            </div>
-            <script
-              type="module"
-              dangerouslySetInnerHTML={{ __html: exportScript }}
-            />
-          </div>
-        </section>
-        <section class="section">
-          <div class="section-head">
-            <h2>Delete account</h2>
-          </div>
-          <form class="section-body" method="post" action="/settings/delete">
+          <script
+            type="module"
+            dangerouslySetInnerHTML={{ __html: exportScript }}
+          />
+        </Section>
+        <Section title="Delete account">
+          <form method="post" action="/settings/delete" class="stack">
             <p class="muted">
               Deletes every play, source, token and session of this account.
               There is no undo.
@@ -384,12 +357,10 @@ function settingsPage(
               />
             </div>
             <div>
-              <button class="danger" type="submit">
-                Delete account
-              </button>
+              <PillButton variant="danger">Delete account</PillButton>
             </div>
           </form>
-        </section>
+        </Section>
       </>
     ),
   });

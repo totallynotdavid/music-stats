@@ -8,16 +8,16 @@ const themes: Record<
   { surface: string; ink: string; muted: string; line: string }
 > = {
   light: {
-    surface: "oklch(99% 0.008 84)",
-    ink: "oklch(24% 0.035 70)",
-    muted: "oklch(49% 0.035 70)",
-    line: "rgb(42 34 22 / 0.14)",
+    surface: "oklch(100% 0 0)",
+    ink: "oklch(18% 0.012 75)",
+    muted: "oklch(52% 0.014 75)",
+    line: "rgb(0 0 0 / 0.06)",
   },
   dark: {
-    surface: "oklch(25% 0.03 70)",
-    ink: "oklch(93% 0.025 84)",
-    muted: "oklch(72% 0.035 70)",
-    line: "rgb(255 255 255 / 0.16)",
+    surface: "oklch(23% 0.009 75)",
+    ink: "oklch(96.5% 0.005 75)",
+    muted: "oklch(71% 0.014 75)",
+    line: "rgb(255 255 255 / 0.09)",
   },
 };
 
@@ -268,7 +268,7 @@ export function renderCard(
       width="${CARD_WIDTH}"
       height="${height}"
       viewBox="0 0 ${CARD_WIDTH} ${height}"
-      font-family="sans-serif"
+      font-family="Inter, system-ui, sans-serif"
       role="img"
     >
       <title>${snapshot.user.name}'s listening report</title>
