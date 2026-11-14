@@ -16,6 +16,7 @@ Spotify ── Cron Trigger pulls ───────────────�
                                                         ▼
 YouTube Music ── user's GitHub Action ── POST ──▶ Worker ──▶ D1 (plays)
                                                    │          KV (snapshots)
+Phone ── Pano Scrobbler ── POST ──────────────────▶  │
                                                    ▼
                          /u/NAME    /u/NAME.json    /u/NAME.svg
 ```
@@ -269,10 +270,11 @@ What each part decides:
   `maybe_missing` is the most plays that repeated songs may have hidden so far.
   Only an upload that changes the page adds to it, and a replay of the stored
   page never does ([Aligning a page](#aligning-a-page-with-the-last-one)).
-- **`tokens`.** An upload token belongs to a YouTube Music source. The database
-  keeps the SHA-256 of the token, never the token. A 256-bit random value needs
-  no slow hash. `hint` is the last four characters, so the dashboard can tell
-  two tokens apart.
+- **`tokens`.** An upload token belongs to a YouTube Music source, and a
+  scrobbler token to a `listenbrainz` source. The database keeps the SHA-256 of
+  the token, never the token. A 256-bit random value needs no slow hash. `hint`
+  is the last four characters, so the dashboard can tell two tokens apart. A
+  token authenticates only the routes of its source's kind.
 - **`tracks` and `artists`.** One catalogue shared by all users. It holds no
   personal data, so deleting an account leaves it alone.
   [Song matching](#4-song-matching) says how a row is found.
@@ -312,6 +314,9 @@ The primary key is `(user_id, played_at, source_id, ref)`, written with
   an upload are new by aligning the page with the last accepted page
   ([Aligning a page](#aligning-a-page-with-the-last-one)), and a guard on
   `play_seq` makes a replayed request insert nothing.
+- **The phone scrobbler** gives a `listened_at` second and `ref` stays empty,
+  like Spotify. A repeated submission of the same listen hits the same primary
+  key and `INSERT OR IGNORE` stores it once.
 
 The triggers fire only for a row that is really inserted. A conflict under
 `INSERT OR IGNORE` fires nothing, so a replayed play changes no total. The
@@ -321,7 +326,8 @@ read 2. D1 itself must be checked at the first milestone.
 
 ## 3. Upload API
 
-Only YouTube Music uses it. The other sources are pulled.
+Only YouTube Music uses it. The phone scrobbler has its own endpoint
+([Phone scrobbler](#phone-scrobbler)) and Spotify is pulled.
 
 ```http
 POST /api/v1/upload
@@ -479,6 +485,59 @@ the same after a new play of that pair, and the service reads it as a replay, so
 that play is missed without a mark. An upload that changes the page still marks
 what it cannot settle.
 
+### Phone scrobbler
+
+An Android scrobbler such as Pano Scrobbler reads the phone's now-playing
+sessions and posts each play to a server that speaks the ListenBrainz submission
+API. The Worker answers it under `/1`:
+
+```http
+POST /1/submit-listens
+Authorization: Token msu_<43 characters>
+Content-Type: application/json
+
+{
+  "listen_type": "single",
+  "payload": [
+    {"listened_at": 1763123400,
+     "track_metadata": {"artist_name": "Radiohead",
+                        "track_name": "Weird Fishes/ Arpeggi",
+                        "release_name": "In Rainbows"}}
+  ]
+}
+```
+
+```json
+{ "status": "ok" }
+```
+
+- **Token.** The same `msu_` shape as an upload token, issued on the settings
+  page, hashed in `tokens`, tied to a `listenbrainz` source the issue creates on
+  first use. `GET /1/validate-token` answers
+  `{code: 200, message, valid: true, user_name: <profile name>}` for a good
+  token and `401` with `{code, error, valid: false}` otherwise. An upload token
+  is not valid here and a scrobbler token is not valid on `/api/v1/upload`: each
+  lookup checks the source's `kind`.
+- **Types.** `listen_type` is `single`, `import` or `playing_now`. `single` and
+  `playing_now` carry exactly one `payload` item, `import` up to 1,000. Each
+  item holds `listened_at` (except `playing_now`, which omits it) and
+  `track_metadata` with `artist_name`, `track_name` and optional `release_name`
+  and `additional_info`; `recording_mbid` and `isrc` from `additional_info` feed
+  song matching like Spotify's ids. A play stores at the exact `listened_at`
+  second. `playing_now` returns `200` and stores nothing.
+- **Limits.** The body is at most 512 KiB and must be `application/json`. A
+  payload over 1,000 listens, a text field over 512 characters, or a
+  `listened_at` before 2005-01-01 or more than a day ahead is refused with `400`
+  and `{code, error}`. There is no rate limit: a scrobbler sends one submission
+  per track, many an hour.
+- **Pano's routes.** Pano Scrobbler joins the configured server to `1/` plus the
+  route name and sends `Authorization: token <key>`. It calls `validate-token`
+  once when the account is added and `submit-listens` for every play. Its other
+  routes (listen history, now playing, loves, stats) get `404` with
+  `{code: 404}` and fail only the feature that asked. A server entered as
+  `https://music.rising.sh` or `https://music.rising.sh/1` both work: the routes
+  are registered under `/1/` and `/1/1/`.
+
 Checked by a throwaway simulation of the rule: 620,164 uploads from random
 histories of 2 to 4 distinct pairs and pages of 2 to 8 plays, where the new page
 overlapped the old one by at least `need` pairs and no play was deleted. The
@@ -600,8 +659,10 @@ at once. A YouTube Music play, which has a day only, pairs with a play of
 another source on the same UTC day.
 
 The play from the source with the richer evidence stays counted: `spotify`, then
-`lastfm` and `listenbrainz` for rows an old database may still hold, then
-`ytmusic`. The loser gets `dup = 1`, and the `plays_uncounted` trigger fixes the
+`listenbrainz` (the phone scrobbler) and `lastfm` for rows an old database may
+still hold, then `ytmusic`. A phone play has an exact second, so it pairs with a
+YouTube Music play of the same track on the same UTC day and the day-stamped row
+loses. The loser gets `dup = 1`, and the `plays_uncounted` trigger fixes the
 totals. When the better source arrives later, as when a Spotify pull stores a
 play that YouTube Music already had, the same rule marks the older row. The code
 is one function, `markDuplicates`, tested as a table of cases. It reads the span
@@ -700,8 +761,10 @@ and keeps no token, so the permissions model of a GitHub App buys nothing.
 - A form that changes state is a `POST` and the Worker checks that `Origin`
   equals the site origin. `SameSite=Lax` does the rest. The upload endpoint uses
   a bearer token and no cookie, so it has no CSRF exposure.
-- Spotify is proven by the OAuth flow, and YouTube Music plays arrive only with
-  an upload token, so no source can be claimed by name.
+- Spotify is proven by the OAuth flow, YouTube Music plays arrive only with an
+  upload token and phone plays only with a scrobbler token, so no source can be
+  claimed by name. The submit routes are token-authenticated API routes, outside
+  the `Origin` check.
 
 **Privacy.** A profile is public by default. The settings page has one switch,
 `is_public`. A hidden profile answers `404` on all three addresses. The first
@@ -951,6 +1014,11 @@ Each milestone ships on its own and ends with a check a person can run.
    of a track that YouTube Music also holds counts once.
 8. **Imports.** Built, then removed on 2026-11-14
    ([File imports](#file-imports)).
+9. **Phone scrobbler.** The ListenBrainz-compatible `submit-listens` and
+   `validate-token` routes, scrobbler tokens on the settings page, and the
+   `listenbrainz` source kind ([Phone scrobbler](#phone-scrobbler)). _Done when_
+   a play scrobbled from a phone lands on the profile and a YouTube Music play
+   of the same track counts once.
 
 ## 8. The Gist Action
 

@@ -188,3 +188,11 @@ npx wrangler d1 execute music-stats --remote --command \
 Store the printed token as `UPLOAD_TOKEN` in the user repository's Actions
 secrets. The token is not stored anywhere else; if it is lost, run the script
 again and revoke the old row by setting `revoked_at`.
+
+## Phone scrobbler
+
+Users issue a scrobbler token on the settings page under **Phone scrobbler** and
+paste it into a ListenBrainz-compatible app such as Pano Scrobbler, with
+`https://music.rising.sh` as the server. The source needs no Worker secret or
+OAuth app: the token lives hashed in the `tokens` table against the user's
+`listenbrainz` source.
