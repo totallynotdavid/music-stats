@@ -11,8 +11,19 @@ import {
   validName,
   type SignedInUser,
 } from "./auth";
+import { ingestPage, type PageSource } from "./ingest";
 import { sourceNames } from "./names";
+import { sealSecret } from "./secret";
 import type { Env } from "./types";
+import { pullIntervalSeconds } from "./ytmusic";
+import {
+  fetchHistoryPage,
+  hasSapisid,
+  HistoryPageError,
+  parseHistoryPage,
+  SignedOutError,
+  todayIn,
+} from "./youtube";
 import { Notice } from "./ui/notice";
 import { PillButton, PillLink } from "./ui/pill";
 import { Section } from "./ui/section";
@@ -20,6 +31,12 @@ import { Page } from "./ui/shell";
 import { TokenDisplay } from "./ui/token";
 
 const exportPageSize = 1000;
+
+const tzScript = `
+const tzField = document.getElementById("ytmusic-tz");
+const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+if (tzField && zone) tzField.value = zone;
+`;
 
 const exportScript = `
 const exportAll = document.getElementById("export-all");
@@ -54,6 +71,7 @@ interface SourceInfo {
   error: string | null;
   maybe_missing: number;
   last_ok_at: number | null;
+  has_secret: number;
 }
 
 interface TokenInfo {
@@ -219,7 +237,9 @@ function settingsPage(
                     <small>
                       {source.account ??
                         (source.kind === "ytmusic"
-                          ? "upload token"
+                          ? source.has_secret
+                            ? "cookie"
+                            : "upload token"
                           : "scrobbler token")}{" "}
                       · {sourceStatus(source)}
                       {sourceNote(source) !== null && (
@@ -236,19 +256,85 @@ function settingsPage(
             </ul>
           )}
         </Section>
-        <Section title="YouTube Music uploads">
-          {uploadTokens.length === 0 ? (
-            <p class="muted">
-              No upload token. Issue one and store it as UPLOAD_TOKEN in your
-              GitHub Action's secrets.
-            </p>
-          ) : (
-            tokenList(uploadTokens)
-          )}
-          <form method="post" action="/settings/tokens">
-            <input type="hidden" name="kind" value="ytmusic" />
-            <PillButton>Issue a new token</PillButton>
-          </form>
+        <Section title="YouTube Music">
+          {(() => {
+            const source = sources.find((item) => item.kind === "ytmusic");
+            const connected = source !== undefined && source.has_secret === 1;
+            return (
+              <>
+                {connected && (
+                  <>
+                    <p class="muted">
+                      Connected. The service pulls your history page every hour.
+                    </p>
+                    <form method="post" action="/settings/ytmusic/disconnect">
+                      <PillButton small>Disconnect cookie</PillButton>
+                    </form>
+                  </>
+                )}
+                <form method="post" action="/settings/ytmusic" class="stack">
+                  <div class="field">
+                    <label for="ytmusic-cookie">Browser cookie</label>
+                    <small>
+                      On music.youtube.com, open the developer tools' Network
+                      tab, reload the page, open the history request and copy
+                      the whole Cookie request header. It signs the service in
+                      like it signs your browser in.
+                    </small>
+                    {fieldError("cookie")}
+                    <input
+                      id="ytmusic-cookie"
+                      name="cookie"
+                      type="password"
+                      required
+                      spellcheck={false}
+                      autocomplete="off"
+                      {...invalid("cookie")}
+                    />
+                  </div>
+                  <div class="field">
+                    <label for="ytmusic-tz">Time zone</label>
+                    <small>
+                      An IANA name such as Europe/Berlin. "Today" and
+                      "Yesterday" on the history page are read in this zone.
+                    </small>
+                    {fieldError("tz")}
+                    <input
+                      id="ytmusic-tz"
+                      name="tz"
+                      type="text"
+                      value="UTC"
+                      required
+                      spellcheck={false}
+                      autocomplete="off"
+                      {...invalid("tz")}
+                    />
+                  </div>
+                  <div>
+                    <PillButton variant="primary">
+                      {connected
+                        ? "Replace the cookie"
+                        : "Connect YouTube Music"}
+                    </PillButton>
+                  </div>
+                </form>
+                <script
+                  type="module"
+                  dangerouslySetInnerHTML={{ __html: tzScript }}
+                />
+                <p class="hint">
+                  Pushing plays with an upload token still works and feeds the
+                  same source. Issue one and store it as UPLOAD_TOKEN in your
+                  GitHub Action's secrets.
+                </p>
+                {uploadTokens.length !== 0 && tokenList(uploadTokens)}
+                <form method="post" action="/settings/tokens">
+                  <input type="hidden" name="kind" value="ytmusic" />
+                  <PillButton small>Issue a new token</PillButton>
+                </form>
+              </>
+            );
+          })()}
         </Section>
         <Section title="Phone scrobbler">
           <p class="muted">
@@ -446,7 +532,8 @@ async function pageData(context: SettingsContext) {
   const user = context.get("user");
   const [sources, tokens] = await context.env.DB.batch([
     context.env.DB.prepare(
-      `SELECT id, kind, account, status, error, maybe_missing, last_ok_at
+      `SELECT id, kind, account, status, error, maybe_missing, last_ok_at,
+              secret IS NOT NULL AS has_secret
        FROM sources WHERE user_id = ?1 ORDER BY kind, id`,
     ).bind(user.id),
     context.env.DB.prepare(
@@ -639,6 +726,113 @@ settingsApp.post("/tokens/revoke", async (context) => {
      (SELECT id FROM sources WHERE user_id = ?3) AND revoked_at IS NULL`,
   )
     .bind(now, id, user.id)
+    .run();
+  return context.redirect("/settings", 303);
+});
+
+const connectedSourceSql = `SELECT id, user_id, status, last_page, play_seq,
+  gap_at FROM sources WHERE user_id = ?1 AND kind = 'ytmusic'`;
+
+settingsApp.post("/ytmusic", async (context) => {
+  const user = context.get("user");
+  const db = context.env.DB;
+  const cookie = await form(context, "cookie");
+  const tzInput = (await form(context, "tz")) || "UTC";
+  const data = await pageData(context);
+  const bad = (error: string, field: string) =>
+    render(context, data, { error, field }, 400);
+  let tz = tzInput;
+  try {
+    tz = new Intl.DateTimeFormat("en-US", {
+      timeZone: tzInput,
+    }).resolvedOptions().timeZone;
+  } catch {
+    return bad(
+      "The time zone is not a known IANA name, for example Europe/Berlin.",
+      "tz",
+    );
+  }
+  if (!hasSapisid(cookie))
+    return bad(
+      "The cookie has no __Secure-3PAPISID. Copy the whole Cookie request header, not one cookie.",
+      "cookie",
+    );
+
+  let html: string;
+  try {
+    html = await fetchHistoryPage(cookie);
+  } catch {
+    return bad(
+      "YouTube Music could not be reached. Try again in a moment.",
+      "cookie",
+    );
+  }
+  let plays;
+  try {
+    plays = parseHistoryPage(html, todayIn(Math.floor(Date.now() / 1000), tz));
+  } catch (error) {
+    if (error instanceof SignedOutError)
+      return bad(
+        "YouTube Music answered as signed out. Copy the cookie from a signed-in browser session.",
+        "cookie",
+      );
+    if (error instanceof HistoryPageError)
+      return bad("The YouTube Music history page did not parse.", "cookie");
+    throw error;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const secret = await sealSecret(context.env, cookie);
+  await db
+    .prepare(
+      `INSERT INTO sources (user_id, kind, secret, tz, next_pull_at)
+       VALUES (?1, 'ytmusic', ?2, ?3, ?4)
+       ON CONFLICT (user_id, kind) DO UPDATE SET
+         secret = excluded.secret, tz = excluded.tz,
+         next_pull_at = excluded.next_pull_at, error = NULL`,
+    )
+    .bind(user.id, secret, tz, now + pullIntervalSeconds)
+    .run();
+  const source = await db
+    .prepare(connectedSourceSql)
+    .bind(user.id)
+    .first<PageSource>();
+  let inserted = 0;
+  if (source !== null) {
+    const result = await ingestPage(
+      db,
+      source,
+      plays
+        .filter(
+          (play) =>
+            play.day !== null &&
+            play.videoId !== null &&
+            [...play.title].length <= 512 &&
+            [...play.artist].length <= 512,
+        )
+        .map((play) => ({
+          day: play.day as string,
+          artist: play.artist,
+          title: play.title,
+          video_id: play.videoId as string,
+        })),
+      { now, pullNextAt: now + pullIntervalSeconds },
+    );
+    inserted = result.inserted;
+  }
+  return render(context, await pageData(context), {
+    notice: `YouTube Music connected. ${inserted} plays stored.`,
+  });
+});
+
+settingsApp.post("/ytmusic/disconnect", async (context) => {
+  const user = context.get("user");
+  await context.env.DB.prepare(
+    `UPDATE sources SET secret = NULL, next_pull_at = NULL, error = NULL,
+       status = CASE WHEN status = 'error' THEN 'active' ELSE status END
+     WHERE user_id = ?1 AND kind = 'ytmusic'`,
+  )
+    .bind(user.id)
     .run();
   return context.redirect("/settings", 303);
 });

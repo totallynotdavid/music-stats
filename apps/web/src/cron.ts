@@ -5,6 +5,7 @@ import {
   nextUtcMidnight,
 } from "./pull";
 import { pullSpotify } from "./spotify";
+import { pullYouTube } from "./ytmusic";
 import type { Env, SourceRow } from "./types";
 
 const d1CapKey = "d1-capped";
@@ -14,6 +15,7 @@ const pulls: Record<
   (env: Env, source: SourceRow, now: number) => Promise<unknown>
 > = {
   spotify: (env, source, now) => pullSpotify(env, source, undefined, now),
+  ytmusic: (env, source, now) => pullYouTube(env, source, undefined, now),
 };
 
 export async function pullDueSources(
@@ -25,9 +27,9 @@ export async function pullDueSources(
   try {
     result = await env.DB.prepare(
       `SELECT id, user_id, kind, account, secret, cursor, backfill_before,
-       gap_before, gap_floor, next_pull_at, idle_pulls
+       gap_before, gap_floor, next_pull_at, idle_pulls, tz, status,
+       last_page, play_seq, gap_at
        FROM sources WHERE next_pull_at IS NOT NULL AND next_pull_at <= ?1
-       AND kind = 'spotify'
        ORDER BY next_pull_at, id LIMIT ${maxSourcesPerPull}`,
     )
       .bind(now)
