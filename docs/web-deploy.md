@@ -114,27 +114,49 @@ Cloudflare creates the DNS record and certificate for the custom domain. Check
 the result in **Workers & Pages → music-stats-web → Settings → Domains &
 Routes**.
 
-## Add a ListenBrainz user
+## Create the Spotify app
 
-Users sign in with GitHub and connect a source on the settings page. To add a
-public user by hand instead, run one command against the remote D1 database.
-`github_id` is an operator-supplied numeric identifier, `name` is the public URL
-name, and `created_at` is the current Unix timestamp. Run it from `apps/web/`:
+The pulled source is one shared Spotify app owned by the operator. In the
+[Spotify developer dashboard](https://developer.spotify.com/dashboard) create an
+app, select **Web API**, and add these redirect URIs:
+
+- `https://music.rising.sh/auth/spotify/callback`
+- `http://127.0.0.1:8787/auth/spotify/callback`
+
+Spotify rejects `localhost` in a redirect URI; the local one must be a loopback
+literal such as `127.0.0.1`
+([redirect URIs](https://developer.spotify.com/documentation/web-api/concepts/redirect_uri)).
+
+Under **User Management**, add the Spotify email of every user who may connect.
+Development mode allows 5 users, and the app owner must have Spotify Premium.
+
+Copy the app's client ID and client secret and store them as Worker secrets,
+from `apps/web/`:
 
 ```sh
-npx wrangler d1 execute music-stats --remote --command \
-  "INSERT INTO users (github_id, name, created_at) VALUES (123456, 'alice', unixepoch());
-   INSERT INTO sources (user_id, kind, account, next_pull_at)
-   VALUES ((SELECT id FROM users WHERE name = 'alice'), 'listenbrainz', 'alice', unixepoch());"
+npx wrangler secret put SPOTIFY_CLIENT_ID
+npx wrangler secret put SPOTIFY_CLIENT_SECRET
 ```
 
-The source account is the public ListenBrainz username. The cron trigger pulls
-it on the next minute. Verify the public page and JSON response:
+The refresh tokens live in `sources.secret`, AES-GCM encrypted. Generate a
+32-byte key, print it as base64, and store it too:
 
 ```sh
-curl -i 'https://music.rising.sh/u/alice'
-curl -i 'https://music.rising.sh/u/alice.json?period=week'
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" \
+  | npx wrangler secret put SPOTIFY_ENCRYPTION_KEY
 ```
+
+For local development put the same values in `apps/web/.dev.vars`, and do not
+commit that file:
+
+```sh
+SPOTIFY_CLIENT_ID=the-client-id
+SPOTIFY_CLIENT_SECRET=the-local-client-secret
+SPOTIFY_ENCRYPTION_KEY=the-base64-key
+```
+
+Users sign in with GitHub and connect Spotify on the settings page. The cron
+trigger pulls the source on the next minute.
 
 ## Add a YouTube Music upload token
 

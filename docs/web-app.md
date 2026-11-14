@@ -12,7 +12,7 @@ history page holds about 200 plays and Spotify's recently-played endpoint holds
 50, so the service stores every play it sees and the history grows with time.
 
 ```text
-ListenBrainz, Spotify ── Cron Trigger pulls ───────────┐
+Spotify ── Cron Trigger pulls ────────────────────────┐
                                                         ▼
 YouTube Music ── user's GitHub Action ── POST ──▶ Worker ──▶ D1 (plays)
                                                    │          KV (snapshots)
@@ -98,7 +98,8 @@ CREATE TABLE sources (
   id INTEGER PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users (id),
   kind TEXT NOT NULL
-    CHECK (kind IN ('lastfm', 'listenbrainz', 'spotify', 'ytmusic')),
+    CHECK (kind IN ('lastfm', 'listenbrainz', 'spotify', 'ytmusic',
+                   'spotify_import', 'ytmusic_import')),
   account TEXT,
   secret BLOB,
   cursor INTEGER,
@@ -254,13 +255,12 @@ What each part decides:
   parse at the last dot without doubt. `AUTOINCREMENT` stops an id from coming
   back after a deletion, so a cached snapshot never reaches a new account.
 - **`sources`.** A user has at most one source of each kind. `account` is the
-  ListenBrainz username or the Spotify user id, and is null for YouTube Music.
-  `secret` holds the Spotify refresh token, encrypted with AES-GCM under a
-  Worker secret, so a leaked database dump holds no usable credential. `cursor`
-  is the newest play ingested, and `backfill_before` the oldest, until the
-  history import ends. `gap_before` and `gap_floor` bound the stretch a full
-  current page skipped, per [Pulled sources](#pulled-sources). `next_pull_at` is
-  null for YouTube Music, which pushes. `idle_pulls` drives the back-off in
+  Spotify user id, and is null for YouTube Music. `secret` holds the Spotify
+  refresh token, encrypted with AES-GCM under a Worker secret, so a leaked
+  database dump holds no usable credential. `cursor` is the newest play
+  ingested. `backfill_before`, `gap_before` and `gap_floor` remain from a
+  removed history walk and are unused. `next_pull_at` is null for YouTube Music,
+  which pushes. `idle_pulls` drives the back-off in
   [Pulled sources](#pulled-sources). Three columns serve YouTube Music only.
   `last_page` is the ordered list of `[day, video id]` pairs of the last
   accepted upload, as JSON, and `play_seq` counts the plays stored so far.
@@ -298,11 +298,11 @@ What each part decides:
 The primary key is `(user_id, played_at, source_id, ref)`, written with
 `INSERT OR IGNORE`.
 
-- **ListenBrainz and Spotify** give each play a timestamp that is the same every
-  time the API returns it. `ref` is empty. One source cannot record two plays in
-  the same second. The track is not in the key on purpose: a source can correct
-  titles after the fact, and a corrected title on a later pull must not become a
-  second play. The first title seen wins.
+- **Spotify** gives each play a timestamp that is the same every time the API
+  returns it. `ref` is empty. One source cannot record two plays in the same
+  second. The track is not in the key on purpose: a source can correct titles
+  after the fact, and a corrected title on a later pull must not become a second
+  play. The first title seen wins.
 - **YouTube Music** gives a day and no time, and nothing that names one play.
   The crate sends `day` only for plays under a heading that names a day. The
   service stores the play at 12:00 UTC of that day, as the crate already does,
@@ -351,9 +351,7 @@ Content-Type: application/json
   once, when the user creates it. The Worker hashes the header value and looks
   the hash up in `tokens`. A revoked or unknown token gets `401`. A token
   reaches one source of one user and nothing else. The user can create a new
-  token and revoke the old one on the settings page. This is the same shape as
-  ListenBrainz, where a user token goes in the `Authorization` header
-  ([API](https://listenbrainz.readthedocs.io/en/latest/users/api/core.html)).
+  token and revoke the old one on the settings page.
 - **Order.** `plays` lists the page as the crate read it, newest first, and the
   order is part of the contract: the Worker reads it to tell new plays from old
   ones. An empty `plays` changes nothing and gets `200`.
@@ -364,11 +362,10 @@ Content-Type: application/json
 - **Limits.** The body is at most 256 KiB, `plays` at most 1,000 items, and the
   `Content-Type` must be `application/json`. The Worker refuses
   `Content-Encoding`: a full body fits the limit uncompressed, so decompression
-  would only add CPU time. ListenBrainz sets the same count (1,000 listens per
-  request). The page holds about 200 plays, so a normal body is under 40 KiB.
-  The crate sends the newest 1,000 plays of a longer page in one request.
-  Several requests would read as several unrelated pages, and the older ones
-  would count again.
+  would only add CPU time. The page holds about 200 plays, so a normal body is
+  under 40 KiB. The crate sends the newest 1,000 plays of a longer page in one
+  request. Several requests would read as several unrelated pages, and the older
+  ones would count again.
 - **Rate.** One upload per source every 30 seconds. The Worker reads
   `sources.last_ok_at` while it authenticates, so the check costs no extra
   query. A faster request gets `429` with `Retry-After`. A replayed page still
@@ -393,9 +390,6 @@ A key built from day, video and a count from the oldest play fails when the
 page's oldest plays fall off. Three plays of a song, then a page holding the
 last two of them and a new one, would number the new play with a key that
 exists. The service instead keeps the last page and aligns the next one with it.
-ListenBrainz keeps a server-side cursor (`latest-import`) for its importers for
-the same reason: the server, not the client, remembers where the last import
-ended.
 
 #### Aligning a page with the last one
 
@@ -538,15 +532,15 @@ code writes them.
 
 ## 4. Song matching
 
-The same song arrives as `Weird Fishes/ Arpeggi` from ListenBrainz,
-`Weird Fishes/ Arpeggi - Remastered` from Spotify, and
+The same song arrives as `Weird Fishes/ Arpeggi` from one Spotify play,
+`Weird Fishes/ Arpeggi - Remastered` from another, and
 `Radiohead - Weird Fishes (Official Video)` from a YouTube music video. The
 service needs one `tracks` row for all three.
 
 **Resolution order.** The first hit wins.
 
 1. `track_aliases` for the source's own key: `spotify:<track id>`,
-   `ytmusic:<video id>`, `listenbrainz:<recording mbid, or artist and title>`.
+   `ytmusic:<video id>`.
 2. A recording MBID, then an ISRC, against `tracks.mbid` and `tracks.isrc`. An
    id match counts only when the artist key or the title key also agrees. Labels
    reuse ISRCs wrongly, and a wrong id must not merge two songs.
@@ -556,8 +550,6 @@ service needs one `tracks` row for all three.
 
 The ids come from the sources that have them. Spotify gives `external_ids.isrc`
 ([recently played](https://developer.spotify.com/documentation/web-api/reference/get-recently-played)).
-ListenBrainz carries `recording_mbid` and `isrc`
-([listen format](https://listenbrainz.readthedocs.io/en/latest/users/json.html)).
 The YouTube history page gives a `videoId` in each play's `watchEndpoint`, and a
 `musicVideoType`: `MUSIC_VIDEO_TYPE_ATV` for the audio track and other values
 for music videos and user uploads. The crate does not read `videoId` today. The
@@ -596,11 +588,11 @@ user-driven "merge these two tracks" is a possible later feature. It rewrites
 
 ### Cross-source duplicates
 
-A user who connects ListenBrainz and Spotify holds each Spotify play twice,
-because ListenBrainz can import Spotify plays. Two plays from different sources
-are one play when they have the same `track_id` and their times are close
-enough. The window follows multi-scrobbler's observation that some sources stamp
-the end of a play and others the start. Here, the window is
+A user who plays the same track on Spotify and in a YouTube music video can hold
+it twice. Two plays from different sources are one play when they have the same
+`track_id` and their times are close enough. The window follows
+multi-scrobbler's observation that some sources stamp the end of a play and
+others the start. Here, the window is
 `max(track length, 4 minutes) + 30 seconds`, or 10 minutes when the length is
 unknown. The match is one to one: each play pairs with the nearest unpaired play
 of the other source. A track on repeat therefore pairs play by play and not all
@@ -608,28 +600,28 @@ at once. A YouTube Music play, which has a day only, pairs with a play of
 another source on the same UTC day.
 
 The play from the source with the richer evidence stays counted: `spotify`, then
-`listenbrainz`, then `ytmusic`. The rank keeps `lastfm` between ListenBrainz and
-YouTube Music for rows a database may still hold. The loser gets `dup = 1`, and
-the `plays_uncounted` trigger fixes the totals. When the better source arrives
-later, as in a ListenBrainz backfill after a Spotify play, the same rule marks
-the older row. The code is one function, `markDuplicates`, tested as a table of
-cases. It reads the span once and groups the plays by track in the Worker. Each
-track's span is then widened by the pairing window and the YouTube Music day
-rule. While a widened span reaches past the covered range, the function reads
-the missing range below it and the missing range above it, widens the spans
-again, and repeats until every span is covered. Then it pairs.
+`lastfm` and `listenbrainz` for rows an old database may still hold, then
+`ytmusic`. The loser gets `dup = 1`, and the `plays_uncounted` trigger fixes the
+totals. When the better source arrives later, as when a Spotify pull stores a
+play that YouTube Music already had, the same rule marks the older row. The code
+is one function, `markDuplicates`, tested as a table of cases. It reads the span
+once and groups the plays by track in the Worker. Each track's span is then
+widened by the pairing window and the YouTube Music day rule. While a widened
+span reaches past the covered range, the function reads the missing range below
+it and the missing range above it, widens the spans again, and repeats until
+every span is covered. Then it pairs.
 
 **Known limit.** A mark is never undone, so a chain of plays that spans more
 than 600 s can count differently by the order its sources arrive. Take a track
-with ListenBrainz plays at noon+300 and noon+900 and a Spotify play at noon. If
-the ListenBrainz plays and a third precise source are stored in an order that
-marks one before Spotify arrives, the mark stays when Spotify pairs with the
-other: the track can count 1 play where one store of all of them counts 2.
-Lifting the limit needs a trigger that recounts a play when `dup` goes from 1
-to 0. Migration 0005 adds that trigger, `plays_recounted`, which returns a
-play's totals when `dup` goes from 1 to 0; the import removal fires it for the
-plays it reopens. What is still missing is a pass that unmarks: `markDuplicates`
-only ever sets `dup` to 1, so the mis-ordered chain above keeps its count of 1.
+with YouTube Music plays at noon+300 and noon+900 and a Spotify play at noon. If
+the YouTube plays and a third precise source are stored in an order that marks
+one before Spotify arrives, the mark stays when Spotify pairs with the other:
+the track can count 1 play where one store of all of them counts 2. Lifting the
+limit needs a trigger that recounts a play when `dup` goes from 1 to 0.
+Migration 0005 adds that trigger, `plays_recounted`, which returns a play's
+totals when `dup` goes from 1 to 0; the import removal fires it for the plays it
+reopens. What is still missing is a pass that unmarks: `markDuplicates` only
+ever sets `dup` to 1, so the mis-ordered chain above keeps its count of 1.
 
 ## Pulled sources
 
@@ -640,47 +632,25 @@ and pulls up to `maxSourcesPerPull` (10) of them, one after the other.
 Workers Paid
 [limits](https://developers.cloudflare.com/workers/platform/limits/).
 
-- **ListenBrainz.** `GET /1/user/NAME/listens` with `min_ts=cursor` and
-  `count=1000`, the API's maximum (`maxListensPerPull`), and `max_ts` for the
-  backfill, since one call takes only one of the two
-  ([API](https://listenbrainz.readthedocs.io/en/latest/users/api/core.html)).
-  `listened_at` is the playback start. Milestone 1 confirms that a public user's
-  listens need no token. One pull takes up to two calls: the current page, then
-  a walk page for what is left of the 1,000-listen budget. A page that comes
-  back full means more waits, so the source is due again at the next tick. The
-  API returns the newest `count` listens at or after `min_ts`, so a full current
-  page skips the listens between the old cursor and the page's oldest. That
-  range is the gap: `gap_floor` holds the old cursor and `gap_before` the walk's
-  upper bound, and the walk drains the gap first, stopping when a page's oldest
-  listen reaches `gap_floor`, before `backfill_before` resumes. The pull reads
-  `X-RateLimit-Remaining` and `X-RateLimit-Reset-In`; when the remaining count
-  reaches 0, or a call answers `429`, the source waits out the reset instead of
-  pulling again.
-- **Spotify.** `GET /me/player/recently-played?limit=50&after=cursor` with a
-  refresh token. It needs the `user-read-recently-played` scope. The endpoint
-  returns at most 50 plays, so a source must be pulled before the user has
-  played 50 more tracks. About 3 minutes a track means 2 hours, so the Spotify
-  back-off never exceeds 1 hour.
-- **Back-off.** A pull that finds plays sets `idle_pulls` to 0 and
-  `next_pull_at` to 15 minutes ahead. An empty pull adds 1 to `idle_pulls` and
-  sets the delay to `15 minutes × 2^idle_pulls`, with a ceiling of 6 hours (1
-  hour for Spotify). A pull that has more work waiting overrides the back-off
-  and comes due at the next tick; a pull the source rate-limits waits out the
-  reset. ListenBrainz keeps the whole history, so waiting loses nothing.
+- **Spotify.** `GET /v1/me/player/recently-played?limit=50&after=<cursor>` with
+  an access token refreshed from the stored refresh token
+  ([recently played](https://developer.spotify.com/documentation/web-api/reference/get-recently-played)).
+  It needs the `user-read-recently-played` scope. `after` takes a Unix
+  millisecond, so the second-granularity `cursor` is multiplied by 1,000, and a
+  play the cursor re-reads is discarded by the `plays` primary key. The endpoint
+  returns at most 50 plays and no older history, so a source must be pulled
+  before the user has played 50 more tracks. About 3 minutes a track means two
+  and a half hours, and the back-off never exceeds 1 hour.
+- **Back-off.** A pull that finds plays sets `idle_pulls` to 0 and comes due
+  again in 20 minutes. An empty pull adds 1 to `idle_pulls` and sets the delay
+  to `15 minutes × 2^idle_pulls`, capped at 60 minutes so the 50-play window is
+  never out of reach. A pull the source rate-limits (`429`) waits out the
+  `Retry-After` value and keeps its `active` status.
 - **Failure.** A pull that fails sets `status = 'error'` with a short `error`
-  and retries with the same back-off. The dashboard shows the message. An
-  expired or revoked Spotify token also shows there.
-- **Backfill write cap.** History walks across the account write at most
-  `maxBackfillRowsPerDay` (1,000,000) D1 rows a day, which caps them at 30
-  million rows a month, inside the 50 million that Workers Paid includes. New
-  plays, uploads and page traffic keep the other 20 million. A walk adds its
-  batch's `meta.rows_written` to the shared KV tally `backfill-rows`, which
-  expires at the next 00:00 UTC; a routine pull of new plays or an upload writes
-  no tally. Once the tally reaches the cap every pull skips its history walk —
-  the gap drain counts too — and schedules its next pull by the usual rule, so
-  the source keeps collecting new plays. At the measured 12 rows a play for new
-  tracks the cap admits roughly 80,000 plays a day, so a 50,000-play history
-  backfills in one day.
+  and retries with the same back-off. The dashboard shows the message. A revoked
+  grant (`invalid_grant` from the refresh) sets `error` to a message that tells
+  the user to reconnect and clears `next_pull_at`, because a revoked grant never
+  recovers on its own.
 
 stats.fm refreshes Spotify about every 100 minutes
 ([FAQ](https://support.spotistats.app/docs/import/spotify-import)), which is the
@@ -688,44 +658,26 @@ same trade of freshness for requests.
 
 ### Spotify and the user limit
 
-A new Spotify app starts in development mode. Spotify's pages today say:
+One shared Spotify app, owned by the operator, serves every user; users do not
+bring their own. A new Spotify app starts in development mode. Spotify's pages
+today say:
 
 - A development-mode app serves at most **5** users, each added by hand in the
   app's dashboard, and the owner must have Premium. Spotify made the change on
   11 February 2026 for new apps and on 9 March for existing ones
   ([migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide),
   [quota modes](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)).
-  The figure of 25 users is the limit before that change. In July 2026 Spotify
-  raised the number of client ids per developer account from 1 to 25 and counts
-  the quota per developer account
-  ([announcement](https://community.spotify.com/t5/Spotify-for-Developers/Web-API-quota-updates-for-Development-Mode/td-p/7508852)).
 - Extended quota lifts the limit, but since 15 May 2025 only an organisation can
   ask for it, and the criteria include a registered business, a launched service
   and 250,000 monthly active users. This project meets none of them.
 
-The design assumes extended quota never comes, and copes in three ways.
+So the service can connect at most 5 Spotify accounts, first come, first served,
+and the operator adds each user's Spotify email in the app's dashboard. The app
+stops working for everyone if the owner's Premium subscription lapses, so the
+operator's own account holds it.
 
-1. **Spotify is optional.** A person who plays Spotify can connect ListenBrainz,
-   which imports Spotify plays. That path has no limit.
-2. **A user brings their own Spotify app.** The user registers an app in their
-   own developer account, sets the redirect URI to
-   `https://music.rising.sh/auth/spotify/callback`, and pastes the client id
-   into the dashboard. The service runs the authorisation code flow with PKCE,
-   which needs no client secret, so it stores only the client id. Each user then
-   sits in their own app and their own quota, the 5-user cap never applies, and
-   the service can host any number of Spotify users. The cost is ten minutes of
-   setup and the Premium subscription Spotify requires of app owners.
-   multi-scrobbler works the same way: its Spotify source asks the user to
-   [create their own app](https://docs.multi-scrobbler.app/configuration/sources/spotify/).
-3. **Shared seats.** If the operator registers one shared app, the service uses
-   it for up to 5 users, first come, first served, and each user is added in
-   Spotify's dashboard by the operator. The service counts the seats and offers
-   the bring-your-own route when none is left. The shared app stops working for
-   everyone if its owner's Premium subscription lapses, so the dashboard never
-   presents it as the default.
-
-Every Spotify request that Spotify answers with `403` or `429` marks the source
-`error` and backs off. A `429` with `reason: QUOTA_EXCEEDED` is shown as such.
+A `429` from Spotify waits out `Retry-After`; a revoked grant marks the source
+`error` until the user reconnects.
 
 ## 5. Accounts and deletion
 
@@ -748,9 +700,8 @@ and keeps no token, so the permissions model of a GitHub App buys nothing.
 - A form that changes state is a `POST` and the Worker checks that `Origin`
   equals the site origin. `SameSite=Lax` does the rest. The upload endpoint uses
   a bearer token and no cookie, so it has no CSRF exposure.
-- A public source is claimed by name, without proof: ListenBrainz data is
-  public, and a squatter exposes only public data on their own page. Spotify is
-  proven by the OAuth flow.
+- Spotify is proven by the OAuth flow, and YouTube Music plays arrive only with
+  an upload token, so no source can be claimed by name.
 
 **Privacy.** A profile is public by default. The settings page has one switch,
 `is_public`. A hidden profile answers `404` on all three addresses. The first
@@ -850,8 +801,7 @@ page:
 
 The service runs on Workers Paid. The Free column stays for comparison, because
 a fork on a free account meets it: a request over a Free daily limit fails until
-00:00 UTC, and a 1,000-listen pull tick is over the 10 ms of CPU that Free
-allows.
+00:00 UTC, and a pull tick is over the 10 ms of CPU that Free allows.
 
 **What a unit of work costs.**
 
@@ -877,32 +827,31 @@ allows.
 
 **Where Workers Paid runs out,** in the order a growing service meets the
 limits. The local figures come from `apps/web/test/bench.test.ts`, which runs a
-recorded 300-listen ListenBrainz page
-(`apps/web/test/fixtures/listens-rob.json`) through the pull in the Vitest
-workerd pool; `PULL_BENCH=1 npx vitest run bench` runs it, and the default suite
-skips it. The deployed figures are `wrangler tail` output from milestone 1 and
-from the `apps/web/bench/` worker, which splits a pull into one route per stage.
+recorded 150-play Spotify recently-played page
+(`apps/web/test/fixtures/spotify-recently-played.json`) through the pull in the
+Vitest workerd pool; `PULL_BENCH=1 npx vitest run bench` runs it, and the
+default suite skips it. The deployed figures are `wrangler tail` output from
+milestone 1 and from the `apps/web/bench/` worker, which splits a pull into one
+route per stage.
 
 1. **D1 writes.** 50 million rows a month are included, then $1.00 per million.
    A new play writes about 7 rows on a known track and 12 on a new one, so the
-   included rows hold about 4 to 7 million new plays a month. The backfill cap
-   of [Pulled sources](#pulled-sources) holds history walks to 30 million of
-   them. A heavy month spends the whole cap and stores 100,000 new plays a day,
-   about 1,000 users at 100 plays each: 30 million + 21 million + about 1
-   million for the pulls that find nothing (2 rows each) is 52 million rows, so
-   the month costs $5 plus about $2. Lowering `maxBackfillRowsPerDay` is the
-   lever if the overage grows. The Worker still handles a D1 daily-limit error,
-   which only Free returns: it records the cap in a KV key that expires at the
-   next 00:00 UTC, and ticks check it before touching D1.
+   included rows hold about 4 to 7 million new plays a month. A heavy month
+   stores 100,000 new plays a day, about 1,000 users at 100 plays each: about 21
+   million write rows plus about 1 million for the pulls that find nothing (2
+   rows each) is 22 million rows, so the month costs $5. The Worker still
+   handles a D1 daily-limit error, which only Free returns: it records the cap
+   in a KV key that expires at the next 00:00 UTC, and ticks check it before
+   touching D1.
 2. **Cron throughput.** A tick pulls up to `maxSourcesPerPull` (10) sources one
    after the other, so 1,440 ticks make 14,400 pulls a day. A source that finds
-   plays is due again in 15 minutes, 96 pulls a day; an idle one backs off to 6
-   hours, 4 a day. That holds about 150 sources that always have new plays, or
-   about 3,600 idle ones; a real mix sits between. Past it, due sources wait in
-   `sources_due` order and nothing fails. A 1,000-listen pull measures about 1.7
-   s of wall time on the bench, so ten pulls take about 17 s. Raising the
-   constant must keep a tick under the 60 s between ticks, or the next tick
-   selects the same sources before their `next_pull_at` moves.
+   plays is due again in 20 minutes, 72 pulls a day; an idle one backs off to 60
+   minutes, 24 a day. That holds about 200 sources that always have new plays,
+   or about 600 idle ones; a real mix sits between. Past it, due sources wait in
+   `sources_due` order and nothing fails. A 50-play pull measures about 1.7 s of
+   wall time on the bench, so ten pulls take about 17 s. Raising the constant
+   must keep a tick under the 60 s between ticks, or the next tick selects the
+   same sources before their `next_pull_at` moves.
 3. **Requests.** 10 million a month are included, then $0.30 per million: about
    four requests a second on average. The cron takes 43,200 of them. Every view
    of a profile or card is a Worker request.
@@ -911,40 +860,40 @@ from the `apps/web/bench/` worker, which splits a pull into one route per stage.
    reads, not availability.
 5. **CPU.** Not a limit at these sizes: 30 s per request and per tick, against
    tens of milliseconds measured. A first `wrangler tail` measured 10 to 23 ms
-   CPU for six ticks that each pulled a 200-listen backfill page of mostly new
-   tracks, with 1.1 to 3.0 s of wall time. The work that grew with new tracks
-   was the per-listen normalisation and the matching batch. Normalisation now
-   runs once per unique artist or title on the page (a 200-listen page holds
-   about 40 artists and 130 titles, not 400 strings), the two clause patterns
-   are skipped when the text holds none of their keywords, and the batch's JSON
-   payloads are deduplicated and carry only the fields each statement reads. A
-   second `wrangler tail` on 2026-11-12 measured a pull tick at 16 to 24 ms
-   `cpuTime` for a 200-listen page (16, 17, 20, 23, 24 ms over five ticks), at
-   12 to 19 ms with the page cut to 50 listens (12, 13, 18, 19 ms over four
-   ticks), and an idle tick with no source due at 1 to 2 ms. The cost barely
-   moves with page size, so most of it is fixed per invocation, not per listen:
-   the local bench measures about 1.2 ms of JavaScript for the same 200-listen
-   page. The bench's own tail on 2026-11-12 measured the stages, in `cpuTime`:
-   the empty handler 0 ms, `JSON.parse` of the page 0 to 7 ms, the valibot parse
-   3 to 6 ms, `resolvePageTracks` 6 to 12 ms, the store step with its D1 batch 6
-   to 17 ms, a pull with a fixture fetcher 5 to 17 ms, and a pull with a real
-   fetch 4 to 28 ms, with a warm isolate repeating the real pull at 4 to 11 ms.
-   Deployed cost runs 5 to 10 times the local figures. The fetch and the JSON
-   parse are not the cost; track resolution, the D1 batch and its result
-   decoding are, and a cold isolate adds more. A warm pull lands at 4 to 13 ms.
-   The upload path shares the matching code: `wrangler tail` measured 9 ms CPU
-   for an upload of 200 plays on new tracks and 1 to 3 ms for 3-play uploads,
-   and the same local measure is about 0.95 ms. On 2026-11-13 the bench measured
-   the Paid sizes, each call storing new plays after a reset: `/store` at 2 to 8
-   ms for 200 listens and 5 to 8 ms for 1,000, `/pull` with the fixture fetcher
-   at 5 to 11 ms for 200 and 10 to 24 ms for 1,000, at 1.5 to 1.7 s of wall
-   time. The duplicate mark runs after every store on the span the page touched.
-   The bench measured it on 2026-11-13 over the 200 newest plays of the
-   worse-ranked source: each run marked 200 plays and wrote 1,200 rows. The
-   `lastfm` case, which pairs by the ten-minute window, read about 620 rows for
-   the span statement at 7, 12 and 7 ms `cpuTime` and 816 to 955 ms of wall
-   time. The `ytmusic` case, which pairs by day, read about 400 rows at 10, 12
-   and 10 ms and about 1 s of wall time.
+   CPU for six ticks that each pulled a 200-play page of mostly new tracks, with
+   1.1 to 3.0 s of wall time. The work that grew with new tracks was the
+   per-listen normalisation and the matching batch. Normalisation now runs once
+   per unique artist or title on the page (a 200-listen page holds about 40
+   artists and 130 titles, not 400 strings), the two clause patterns are skipped
+   when the text holds none of their keywords, and the batch's JSON payloads are
+   deduplicated and carry only the fields each statement reads. A second
+   `wrangler tail` on 2026-11-12 measured a pull tick at 16 to 24 ms `cpuTime`
+   for a 200-listen page (16, 17, 20, 23, 24 ms over five ticks), at 12 to 19 ms
+   with the page cut to 50 listens (12, 13, 18, 19 ms over four ticks), and an
+   idle tick with no source due at 1 to 2 ms. The cost barely moves with page
+   size, so most of it is fixed per invocation, not per listen: the local bench
+   measures about 1.2 ms of JavaScript for the same 200-listen page. The bench's
+   own tail on 2026-11-12 measured the stages, in `cpuTime`: the empty handler 0
+   ms, `JSON.parse` of the page 0 to 7 ms, the valibot parse 3 to 6 ms,
+   `resolvePageTracks` 6 to 12 ms, the store step with its D1 batch 6 to 17 ms,
+   a pull with a fixture fetcher 5 to 17 ms, and a pull with a real fetch 4 to
+   28 ms, with a warm isolate repeating the real pull at 4 to 11 ms. Deployed
+   cost runs 5 to 10 times the local figures. The fetch and the JSON parse are
+   not the cost; track resolution, the D1 batch and its result decoding are, and
+   a cold isolate adds more. A warm pull lands at 4 to 13 ms. The upload path
+   shares the matching code: `wrangler tail` measured 9 ms CPU for an upload of
+   200 plays on new tracks and 1 to 3 ms for 3-play uploads, and the same local
+   measure is about 0.95 ms. On 2026-11-13 the bench measured the Paid sizes,
+   each call storing new plays after a reset: `/store` at 2 to 8 ms for 200
+   listens and 5 to 8 ms for 1,000, `/pull` with the fixture fetcher at 5 to 11
+   ms for 200 and 10 to 24 ms for 1,000, at 1.5 to 1.7 s of wall time. The
+   duplicate mark runs after every store on the span the page touched. The bench
+   measured it on 2026-11-13 over the 200 newest plays of the worse-ranked
+   source: each run marked 200 plays and wrote 1,200 rows. The `lastfm` case,
+   which pairs by the ten-minute window, read about 620 rows for the span
+   statement at 7, 12 and 7 ms `cpuTime` and 816 to 955 ms of wall time. The
+   `ytmusic` case, which pairs by day, read about 400 rows at 10, 12 and 10 ms
+   and about 1 s of wall time.
 
 ### Why there is no Last.fm source
 
@@ -961,45 +910,45 @@ crate still reads Last.fm, because that output is private to its user.
 
 Each milestone ships on its own and ends with a check a person can run.
 
-1. **ListenBrainz, profile, JSON.** `apps/web/` with `wrangler.jsonc`, the
-   migration, the custom domain `music.rising.sh` and a deploy workflow. Users
-   are rows added with `wrangler d1 execute`, with no sign-in. The cron pulls
-   ListenBrainz with backfill. `/u/NAME` and `/u/NAME.json` work for the three
-   periods. The milestone writes `docs/web-deploy.md` with every account step,
-   secret name and command, and measures CPU per pull and rows written per play
-   on real D1. _Done when_ the history of a public ListenBrainz account renders
-   and a second pull inserts nothing.
+1. **Spotify, profile, JSON.** `apps/web/` with `wrangler.jsonc`, the migration,
+   the custom domain `music.rising.sh` and a deploy workflow. Users are rows
+   added with `wrangler d1 execute`, with no sign-in. The cron pulls Spotify.
+   `/u/NAME` and `/u/NAME.json` work for the three periods. The milestone writes
+   `docs/web-deploy.md` with every account step, secret name and command, and
+   measures CPU per pull and rows written per play on real D1. _Done when_ a
+   pulled page renders and a second pull inserts nothing.
 2. **Last.fm behind the gate.** Built, then removed on 2026-11-14
    ([why](#why-there-is-no-lastfm-source)).
 3. **Card and cache.** `/u/NAME.svg`, the KV snapshots and the headers. _Done
    when_ a README embeds the card and the CPU of a warm request is under 10 ms.
 4. **Sign-in and self-service.** GitHub OAuth, sessions, the settings page where
-   a user adds a ListenBrainz source, the name and visibility settings, export,
-   and deletion. _Done when_ a new person signs in, connects ListenBrainz, and
-   deletes the account, and no row of theirs remains.
+   a user connects Spotify, the name and visibility settings, export, and
+   deletion. _Done when_ a new person signs in, connects Spotify, and deletes
+   the account, and no row of theirs remains.
 5. **YouTube Music push.** The upload endpoint, tokens, the alignment of
    [section 3](#aligning-a-page-with-the-last-one), the crate's upload output,
    and the template workflow ([below](#8-the-gist-action)). Measures the day
    boundary and the CPU of the alignment at 1,000 pairs. The dashboard shows a
-   `gap` and warns that a YouTube play that is also scrobbled to ListenBrainz
-   counts twice until milestone 6. _Done when_ an integration test and a live
-   run both pass. The test posts a page of three plays (`c b a`), then a page of
-   the two newest of them and one new play (`x c b`): four plays are stored and
-   the total reads 4. It then posts `x c b` again (still 4), and a page that
-   shares nothing (`q r s`: seven plays and the source status `gap`). A second
-   case covers repeated plays: `A A B`, then `A A A` stores four plays in total
-   with `ambiguous` 0. `A A A` again is a replay: it stores none, keeps the
-   total at four, reports `inserted` 0 and `ambiguous` 0, and leaves
-   `maybe_missing` unchanged. Then `A A A A` stores one play (five in total) and
-   reports `ambiguous` 1, and `maybe_missing` becomes 1. A third source starts
-   with `A A`, then posts `A A A`: three plays in total, `ambiguous` 0. The live
-   run is two runs of the Action one hour apart with a play between them, and
-   each play is stored once.
+   `gap` and warns that a YouTube play that is also played on Spotify counts
+   twice until milestone 6. _Done when_ an integration test and a live run both
+   pass. The test posts a page of three plays (`c b a`), then a page of the two
+   newest of them and one new play (`x c b`): four plays are stored and the
+   total reads 4. It then posts `x c b` again (still 4), and a page that shares
+   nothing (`q r s`: seven plays and the source status `gap`). A second case
+   covers repeated plays: `A A B`, then `A A A` stores four plays in total with
+   `ambiguous` 0. `A A A` again is a replay: it stores none, keeps the total at
+   four, reports `inserted` 0 and `ambiguous` 0, and leaves `maybe_missing`
+   unchanged. Then `A A A A` stores one play (five in total) and reports
+   `ambiguous` 1, and `maybe_missing` becomes 1. A third source starts with
+   `A A`, then posts `A A A`: three plays in total, `ambiguous` 0. The live run
+   is two runs of the Action one hour apart with a play between them, and each
+   play is stored once.
 6. **Cross-source duplicates.** `markDuplicates`. _Done when_ a user with
-   ListenBrainz and YouTube Music on one listening app shows each play once.
-7. **Spotify.** Bring-your-own app first, then shared seats if the operator
-   registers an app. _Done when_ a user connects Spotify and a play of a track
-   that ListenBrainz also holds counts once.
+   Spotify and YouTube Music on one listening app shows each play once.
+7. **Spotify replaces ListenBrainz.** The OAuth connect, the token vault and the
+   pull of this milestone swap the pulled source to Spotify, and a migration
+   deletes the old source's rows. _Done when_ a user connects Spotify and a play
+   of a track that YouTube Music also holds counts once.
 8. **Imports.** Built, then removed on 2026-11-14
    ([File imports](#file-imports)).
 
@@ -1053,20 +1002,15 @@ upload.
 
 | Question         | Project                                                                           | What it does                                                                                                                              | What this design takes                                         |
 | ---------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Pulled sources   | [multi-scrobbler](https://github.com/FoxxMD/multi-scrobbler)                      | Polls Spotify and YouTube Music, keeps a queue, retries after failures, and sends to Last.fm, ListenBrainz and others.                    | The pull loop and the user's own Spotify app.                  |
+| Pulled sources   | [multi-scrobbler](https://github.com/FoxxMD/multi-scrobbler)                      | Polls Spotify and YouTube Music, keeps a queue, retries after failures, and sends to Last.fm, ListenBrainz and others.                    | The pull loop.                                                 |
 | Duplicates       | multi-scrobbler                                                                   | Scores title, artist and album text with Levenshtein and Dice, and compares times in four states (exact, close, during, fuzzy).           | Time as the second witness, and a window for end-time sources. |
-| Push and listens | [ListenBrainz](https://listenbrainz.readthedocs.io/en/latest/users/api/core.html) | Per-user token in `Authorization`, 1,000 listens a request, `listen_type: import`, MBIDs and ISRC in `additional_info`.                   | The token header, the batch limit and the identifiers.         |
+| Push and listens | [ListenBrainz](https://listenbrainz.readthedocs.io/en/latest/users/api/core.html) | Per-user token in `Authorization`, 1,000 listens a request, `listen_type: import`, MBIDs and ISRC in `additional_info`.                   | The token header and the batch limit.                          |
 | Weekly output    | [music-box](https://github.com/jacc/music-box)                                    | A fork-and-secrets Action reads Last.fm and writes the week to a Gist.                                                                    | The Gist stays, as the no-account path.                        |
 | Workers and D1   | [listentomore](https://github.com/rianvdm/listentomore)                           | Hono on Workers, D1 for data and KV for cache.                                                                                            | The platform pairing.                                          |
-| Spotify upkeep   | [stats.fm](https://support.spotistats.app/docs/import/spotify-import)             | Refreshes Spotify history about every 100 minutes and needs an import of the full history for play counts, since the API gives no counts. | Polling with back-off, and the optional import in milestone 8. |
+| Spotify upkeep   | [stats.fm](https://support.spotistats.app/docs/import/spotify-import)             | Refreshes Spotify history about every 100 minutes and needs an import of the full history for play counts, since the API gives no counts. | Polling with back-off.                                         |
 
 ## Open questions
 
-Only the operator can act on this one.
-
-- **The Spotify developer app.** Does the operator register a shared app? It
-  needs an owner with Spotify Premium, the redirect URI
-  `https://music.rising.sh/auth/spotify/callback`, and a hand-added user in the
-  app's dashboard for each of the 5 seats. Without it, Spotify users bring their
-  own app, and milestone 7 ships that route alone. The answer decides only the
-  second route in [Spotify and the user limit](#spotify-and-the-user-limit).
+None. The operator registers the one shared Spotify app, per
+[Spotify and the user limit](#spotify-and-the-user-limit); the dashboard steps
+are in [Web deployment](web-deploy.md#create-the-spotify-app).

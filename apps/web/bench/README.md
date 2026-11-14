@@ -1,129 +1,51 @@
-# music-stats-bench
+# Bench worker
 
-A Worker that splits one ListenBrainz pull into its stages, one route per stage,
-so `wrangler tail` shows the `cpuTime` of a single stage on the deployed
-platform. It deploys to workers.dev only and binds the same D1 database and KV
-namespace as `apps/web/wrangler.jsonc`.
+A Worker that splits one Spotify pull into its stages, one route per stage, and
+times each run. It shares the main Worker's D1 database and KV namespace but
+keeps its own name (`music-stats-bench`) so `wrangler dev` and deploys stay
+separate. Every seeded row belongs to a `_bench` or `_dups` user, and `/pull`
+parks its source (`next_pull_at = NULL`) so the cron never picks it up.
 
-## Deploy
+Run it locally:
 
 ```sh
 cd apps/web/bench
-npx wrangler deploy
+npx wrangler dev
 ```
 
-The deploy prints the workers.dev URL, used below as `$BENCH`.
+It needs `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` and
+`SPOTIFY_ENCRYPTION_KEY` from `apps/web/.dev.vars` (wrangler reads
+`../.dev.vars` or the local `.dev.vars`).
 
-## Run
+The routes:
 
-Start a tail in a second terminal, then run each route at `?repeat=1`,
-`?repeat=2` and `?repeat=5`. `repeat` runs the stage that many times inside one
-request, so repeat=2 minus repeat=1 is the per-run cost with repeat=1 holding
-the first-call cost (lazy compilation, first D1 round trip of the isolate).
+| Route          | What it measures                                   |
+| -------------- | -------------------------------------------------- |
+| `/`            | Empty handler, the floor for a request             |
+| `/json`        | `JSON.parse` of the recorded page                  |
+| `/parse`       | `v.safeParse` with the recently-played schema      |
+| `/resolve`     | `resolvePageTracks` on the page's inputs           |
+| `/store`       | `storeListens`, each repeat on plays shifted a day |
+| `/pull`        | `pullSpotify` with a fixture fetcher               |
+| `/reset`       | Delete every `_bench` row                          |
+| `/dups-seed`   | Seed 200 plays × 2 sources for the duplicate bench |
+| `/dups-reset`  | Set `dup = 0` on the 200 newest plays              |
+| `/dups`        | `markDuplicates` over the 200 newest plays         |
+| `/dups-delete` | Delete every `_dups` row                           |
 
-Runs of `/store`, `/pull` and `/pull-live` shift `listened_at` back by a day per
-run index, so every repeat stores 200 new plays instead of hitting the duplicate
-path; repeat=2 minus repeat=1 measures the same insert work, plus the first-call
-cost on run 0. The catalogue is shared, so the first run after a fresh deploy
-also creates the page's tracks and aliases while later runs resolve them;
-`/reset` clears the bench's plays but not the catalogue.
+All routes take `?repeat=N` (1-20, default 1) and answer JSON
+`{"route": …, "repeat": …, "ms": […]}` with one timing per repeat. `/resolve`,
+`/store` and `/pull` also take `?n=` for the page size (1-1000, default the
+fixture's 150; sizes over 150 repeat the fixture shifted into the past).
 
-```sh
-npx wrangler tail --format json
-```
+The pull routes use the fixture fetcher in `index.ts`, so no request reaches
+Spotify. `/pull` covers the token refresh path, the page fetch, the store and
+the duplicate mark in one call; the stage routes isolate the JSON parse, the
+schema parse, the track resolution and the store.
 
-```sh
-curl "$BENCH/reset"
-for route in "" json parse resolve store pull pull-live; do
-  for n in 1 2 5; do
-    curl -s "$BENCH/$route?repeat=$n"
-  done
-done
-```
+`/dups-seed?kind=` seeds the losing source as `ytmusic` (pairs by day) or
+`lastfm` (pairs by the ten-minute window). `/dups` re-runs the mark on the same
+span, so a second call shows the cost of a no-op mark.
 
-In the tail output each event carries `event.request.url`, `cpuTimeMs` and
-`wallTimeMs`. `cpuTimeMs` is the billed CPU; match it to a request by the URL.
-Run `/reset` again after the sweep to remove the bench rows.
-
-`/resolve`, `/store` and `/pull` take `?n=1..1000`, the listens on the page (200
-by default). A page over the recording's 300 listens repeats it, each copy older
-than the last by the recording's span, so every listen is a distinct play. The
-tracks repeat, so a page past 300 is mostly known tracks. On 2026-11-13, with
-`/reset` before each call so every call stored new plays, `/store` measured 2 to
-8 ms `cpuTime` at `n=200` and 5 to 8 ms at `n=1000`, and `/pull` 5 to 11 ms at
-`n=200` and 10 to 24 ms at `n=1000`, at 1.5 to 1.7 s of wall time. A
-1,000-listen store wrote 994 plays: the recording holds a few listens that share
-a timestamp.
-
-The `ms` array each route returns is a helper, not the measure. A deployed
-Worker advances timers across I/O, not during synchronous execution, so the
-per-run `ms` undercounts the purely synchronous stages. `cpuTimeMs` from the
-tail is the figure to compare across routes.
-
-| Route          | Stage measured                                     | Local    | Deployed `cpuTime` |
-| -------------- | -------------------------------------------------- | -------- | ------------------ |
-| `/`            | Empty handler                                      | 8 ms     | 0 ms               |
-| `/json`        | `JSON.parse` of the 200-listen body                | 0.2 ms   | 0-7 ms             |
-| `/parse`       | `v.safeParse` with the ListenBrainz schema         | 0.3 ms   | 3-6 ms             |
-| `/resolve`     | `resolvePageTracks` on the page                    | 0.6 ms   | 6-12 ms            |
-| `/store`       | `storeListensPage`, including the D1 batch         | 5-15 ms  | 6-17 ms            |
-| `/pull`        | `pullListenBrainz` with a fixture fetcher          | 10-30 ms | 5-17 ms            |
-| `/pull-live`   | `pullListenBrainz` with real `fetch` of user `rob` | 1.9 s    | 4-28 ms            |
-| `/dups-seed`   | Seeds the `_dups` user, two sources and 400 plays  | -        | -                  |
-| `/dups-reset`  | Clears `dup` on the last 200 loser plays           | -        | -                  |
-| `/dups`        | `markDuplicates` over the last 200 loser plays     | -        | 7-12 ms            |
-| `/dups-delete` | Deletes the `_dups` user's rows                    | -        | -                  |
-| `/reset`       | Deletes the bench user's rows                      | -        | -                  |
-
-The page is the first 200 listens of `apps/web/test/fixtures/listens-rob.json`,
-the same recording `apps/web/test/bench.test.ts` uses. Local figures are medians
-on this host: `/json`, `/parse` and `/resolve` measured in Bun; `/store`,
-`/pull` and `/pull-live` measured through `wrangler dev`, so they hold local D1
-and network wall time the deployed `cpuTime` counts differently. `/` is the
-whole request's local wall time.
-
-The deployed column is the `cpuTimeMs` range tailed on 2026-11-12 across
-repeat=1, 2 and 5, plus a warm-isolate pass at repeat=1 (`/pull` 7-13,
-`/pull-live` 4-11, `/json` 0-1). It runs 5 to 10 times the local figure on the
-same stage. The fetch and the JSON parse are not the cost: track resolution, the
-D1 batch and its result decoding are, and a cold isolate adds more on top.
-
-The `/dups` routes measure `markDuplicates`, the mark a pull runs over the span
-its page touches. `/dups-seed?kind=lastfm` or `?kind=ytmusic` (the default)
-creates a `_dups` user (id -3) with a ListenBrainz anchor source (id -3) and a
-loser source of the named kind (id -4), then writes 200 plays to each. `lastfm`
-stands in for any precise source that ranks below ListenBrainz; no Last.fm pull
-exists. A `lastfm` seed puts each loser play five seconds after its anchor pair,
-a `ytmusic` seed puts it at noon of the anchor's day. 200 is the depth the mark
-reads: the range lookup takes the last 200 loser plays and the span extension
-reaches only the window around them, so a larger seed adds writes without
-changing the span, the pairs or the 200 marks. `/dups-reset` clears `dup` on the
-last 200 loser plays so `/dups` can run again, and `/dups-delete` removes the
-user's rows, which a seed does not: deleting them is what lets a second kind run
-inside the day's write limit. A run is `/dups-seed`, then `/dups` (with
-`/dups-reset` before each repeat), then `/dups-delete`.
-
-Deployed on 2026-11-13, three `/dups` runs at `kind=lastfm` each marked 200
-plays and wrote 1,200 rows, at 7, 12 and 7 ms `cpuTime` and 816 to 955 ms of
-wall time; D1's per-query analytics counted about 620 rows read a run for the
-span statement. Three runs at `kind=ytmusic` each marked 200 plays and wrote
-1,200 rows, at 10, 12 and 10 ms `cpuTime` and about 1 s of wall time, and read
-about 400 rows for the span statement. The seed writes an estimated 2,800 rows:
-400 plays at the 7 rows a play of [docs/web-app.md](../../docs/web-app.md) for a
-known track, plus the shared `dartist` and `dtrack` catalogue rows on the first
-seed.
-
-## What the bench writes
-
-The bench runs as its own user (`id` -1, name `_bench`, which no GitHub login
-can take) with a ListenBrainz source (`id` -1, account `rob`). The store and
-pull routes create those rows when missing (one `INSERT OR IGNORE` batch), and
-the pull routes then park the source (`UPDATE sources SET next_pull_at = NULL`)
-once the runs finish: a pull writes `next_pull_at`, and a due bench source would
-be pulled live by the production cron until the next `/reset`. Each is one
-constant D1 statement inside those routes' `cpuTime`. `/reset` deletes its
-`plays`, the totals-table rows, `tokens`, `sessions`, `sources` and `users`
-rows, and nothing else. The shared catalogue (`artists`, `tracks`,
-`track_aliases`) is not reset: the pull fills it with `INSERT OR IGNORE`, the
-same rows a real pull of the same listens writes. The bench never reads or
-writes any other user's rows.
+The duplicate mark runs inside `/store` and `/pull` too, so their timings
+include it.
