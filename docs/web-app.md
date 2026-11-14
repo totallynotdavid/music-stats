@@ -844,6 +844,7 @@ sign-in screen states that profiles are public.
 | `/u/NAME.json` | The same figures as JSON.                                   |
 | `/u/NAME.svg`  | The card. `?period=`, `?n=1..10`, `?theme=light` or `dark`. |
 | `/play`        | The guess-the-song game.                                    |
+| `/party`       | Party playlist. `?u=NAME,NAME` (2 to 8), `?n=25` or `50`.   |
 
 - **Periods.** `week` is the last 7 days, `month` the last 30 days, both
   rolling, and `all` is everything. A calendar week would be empty on Monday
@@ -914,6 +915,24 @@ title.
 - **Attribution.** Each reveal names the title and artist, shows the cover and
   links to the track on Deezer or Apple Music with the service's name, which
   both services require.
+
+### Party playlist
+
+`/party` blends the public profiles named in `u` into one playlist of `n`
+tracks, 25 or 50. Each person's candidates are their tracks with the most plays
+in the last 90 days, filled from their all-time top tracks when that list is
+short. Tracks that two or more people share come first, ordered by how many
+people share them. The rest are dealt round-robin, one per person in turn, so a
+heavy listener cannot fill the list. A track appears once, and an artist never
+sits in the previous three slots when another candidate allows it. A name that
+is not a public profile gets the same refusal whether the profile is hidden or
+missing. The blend is cached in KV for 10 minutes under `party:<n>:<names>`.
+
+"Play on YouTube" opens
+`https://www.youtube.com/watch_videos?video_ids=ID1,ID2,...`, built from the
+`ytmusic` aliases of the blended tracks, at most 50 ids. Measured on 2026-11-14,
+the link answers 303 with an anonymous playlist and needs no sign-in. Tracks
+with no alias are listed on the page and left out of the link.
 
 ## 6. Limits and costs
 
