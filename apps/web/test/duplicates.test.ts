@@ -3,8 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import migrations from "virtual:web-migrations";
 import { app } from "../src/app";
 import { markDuplicates } from "../src/duplicates";
-import { pullListenBrainz } from "../src/listenbrainz";
-import type { SourceRow } from "../src/types";
+import { storeListens } from "../src/matching";
 
 const now = Math.floor(Date.now() / 1000);
 const dayText = new Date((now - 86400) * 1000).toISOString().slice(0, 10);
@@ -115,13 +114,6 @@ function countedDb() {
     },
   } as unknown as D1Database;
   return { db, counts };
-}
-
-async function sourceRow(kind: string) {
-  const row = await env.DB.prepare("SELECT * FROM sources WHERE id = ?1")
-    .bind(sourceIds[kind])
-    .first<SourceRow>();
-  return row!;
 }
 
 beforeEach(async () => {
@@ -580,26 +572,26 @@ describe("cross-source duplicates", () => {
       additional_info: {},
     };
 
-    const listens = [
-      { listened_at: times[2], track_metadata: songA },
-      { listened_at: times[1], track_metadata: songB },
-      { listened_at: times[0], track_metadata: songA },
+    const plays = [
+      { at: times[2], meta: songA },
+      { at: times[1], meta: songB },
+      { at: times[0], meta: songA },
     ];
-    const lbFetcher = async (url: string) => ({
-      status: 200,
-      body: {
-        payload: {
-          listens: new URL(url).searchParams.has("max_ts") ? [] : listens,
-        },
-      },
-    });
-    const lbPull = await pullListenBrainz(
-      env,
-      await sourceRow("listenbrainz"),
-      lbFetcher,
-      now,
+    const lbStored = await storeListens(
+      env.DB,
+      plays.map((play, index) => ({
+        kind: "listenbrainz",
+        sourceKey: `lb-${index}`,
+        artist: play.meta.artist_name,
+        title: play.meta.track_name,
+        listenedAt: play.at,
+        userId: 1,
+        sourceId: sourceIds.listenbrainz,
+      })),
+      "listenbrainz",
     );
-    expect(lbPull.inserted).toBe(3);
+    await markDuplicates(env.DB, 1, times[0], times[2]);
+    expect(lbStored.inserted).toBe(3);
 
     const upload = await post([
       { day: dayText, artist: "Artist One", title: "Song A", video_id: "va2" },
@@ -665,39 +657,26 @@ describe("cross-source duplicates", () => {
       { kind: "lastfm", at: fmAt, ref: "old1" },
       { kind: "lastfm", at: fmAt + 100, ref: "old2" },
     ]);
-    await env.DB.prepare(
-      "UPDATE sources SET cursor = ?1, backfill_before = ?2 WHERE id = ?3",
-    )
-      .bind(noon, noon - 1, sourceIds.listenbrainz)
-      .run();
     const song = {
       artist_name: "Artist One",
       track_name: "Song A",
       additional_info: {},
     };
-    const lbFetcher = async (url: string) => {
-      const params = new URL(url).searchParams;
-      if (!params.has("max_ts"))
-        return { status: 200, body: { payload: { listens: [] } } };
-      return {
-        status: 200,
-        body: {
-          payload: {
-            listens: [
-              { listened_at: fmAt + 3, track_metadata: song },
-              { listened_at: fmAt + 103, track_metadata: song },
-            ],
-          },
-        },
-      };
-    };
-    const pull = await pullListenBrainz(
-      env,
-      await sourceRow("listenbrainz"),
-      lbFetcher,
-      now,
+    const stored = await storeListens(
+      env.DB,
+      [fmAt + 3, fmAt + 103].map((at, index) => ({
+        kind: "listenbrainz",
+        sourceKey: `bf-${index}`,
+        artist: song.artist_name,
+        title: song.track_name,
+        listenedAt: at,
+        userId: 1,
+        sourceId: sourceIds.listenbrainz,
+      })),
+      "listenbrainz",
     );
-    expect(pull.inserted).toBe(2);
+    await markDuplicates(env.DB, 1, fmAt + 3, fmAt + 103);
+    expect(stored.inserted).toBe(2);
     const flags = await dupByRef();
     expect(flags.get("old1")).toBe(1);
     expect(flags.get("old2")).toBe(1);

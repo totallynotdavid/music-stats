@@ -12,7 +12,7 @@ async function seedUser() {
       "INSERT INTO users (id, github_id, name, created_at) VALUES (1, 1, 'alice', ?1)",
     ).bind(now),
     env.DB.prepare(
-      "INSERT INTO sources (id, user_id, kind, account, next_pull_at) VALUES (10, 1, 'listenbrainz', 'alice-lb', ?1)",
+      "INSERT INTO sources (id, user_id, kind, account, next_pull_at) VALUES (10, 1, 'spotify', 'alice-sp', ?1)",
     ).bind(now),
   ]);
 }

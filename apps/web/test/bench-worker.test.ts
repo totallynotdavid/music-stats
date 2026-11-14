@@ -3,16 +3,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import migrations from "virtual:web-migrations";
 import worker from "../bench/index";
 import { pullDueSources } from "../src/cron";
-import fixture from "./fixtures/listens-rob.json";
 
 const now = Math.floor(Date.now() / 1000);
+const key = btoa(
+  String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))),
+);
 
-const livePage = () =>
-  new Response(
-    JSON.stringify({
-      payload: { listens: fixture.payload.listens.slice(0, 200) },
-    }),
-  );
+const testEnv = () =>
+  ({
+    ...env,
+    SPOTIFY_CLIENT_ID: "spotify-id",
+    SPOTIFY_CLIENT_SECRET: "spotify-secret",
+    SPOTIFY_ENCRYPTION_KEY: key,
+  }) as never;
 
 describe("bench worker", () => {
   afterEach(async () => {
@@ -20,30 +23,25 @@ describe("bench worker", () => {
     await reset();
   });
 
-  it.each(["/pull", "/pull-live"] as const)(
-    "leaves the bench source idle after %s",
-    async (route) => {
-      await applyD1Migrations(env.DB, migrations);
-      const fetchSpy = vi
-        .spyOn(globalThis, "fetch")
-        .mockImplementation(async () => livePage());
-      const response = await worker.fetch(
-        new Request(`http://bench${route}?repeat=1`) as Request<
-          unknown,
-          IncomingRequestCfProperties
-        >,
-        env as any,
-      );
-      expect(response.status).toBe(200);
-      const source = await env.DB.prepare(
-        "SELECT next_pull_at FROM sources WHERE id = -1",
-      ).first<{ next_pull_at: number | null }>();
-      expect(source?.next_pull_at).toBeNull();
-      fetchSpy.mockClear();
-      await pullDueSources(env as any, now + 86400);
-      expect(fetchSpy).not.toHaveBeenCalled();
-    },
-  );
+  it("leaves the bench source idle after /pull", async () => {
+    await applyD1Migrations(env.DB, migrations);
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const response = await worker.fetch(
+      new Request("http://bench/pull?repeat=1") as Request<
+        unknown,
+        IncomingRequestCfProperties
+      >,
+      testEnv(),
+    );
+    expect(response.status).toBe(200);
+    const source = await env.DB.prepare(
+      "SELECT next_pull_at FROM sources WHERE id = -1",
+    ).first<{ next_pull_at: number | null }>();
+    expect(source?.next_pull_at).toBeNull();
+    fetchSpy.mockClear();
+    await pullDueSources(testEnv(), now + 86400);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 
   it("stores new plays on every repeat", async () => {
     await applyD1Migrations(env.DB, migrations);
@@ -52,12 +50,12 @@ describe("bench worker", () => {
         unknown,
         IncomingRequestCfProperties
       >,
-      env as any,
+      testEnv(),
     );
     expect(response.status).toBe(200);
     const row = await env.DB.prepare(
       "SELECT count(*) AS n FROM plays WHERE user_id = -1",
     ).first<{ n: number }>();
-    expect(row?.n).toBe(400);
+    expect(row?.n).toBe(300);
   });
 });

@@ -3,28 +3,29 @@ import * as v from "valibot";
 import { beforeEach, describe, it } from "vitest";
 import migrations from "virtual:web-migrations";
 import { getStats } from "../src/aggregate";
-import { pullListenBrainz } from "../src/listenbrainz";
 import { resolvePageTracks } from "../src/matching";
 import { normalizeText } from "../src/normalize";
+import {
+  playInputs,
+  pullSpotify,
+  RecentlyPlayedSchema,
+  sealTokens,
+} from "../src/spotify";
 // @ts-expect-error vite ?raw import
-import fixtureRaw from "./fixtures/listens-rob.json?raw";
+import fixtureRaw from "./fixtures/spotify-recently-played.json?raw";
 
-const ListenSchema = v.object({
-  listened_at: v.number(),
-  track_metadata: v.object({
-    artist_name: v.string(),
-    track_name: v.string(),
-    additional_info: v.optional(
-      v.object({
-        recording_mbid: v.optional(v.string()),
-        isrc: v.optional(v.string()),
-      }),
-    ),
-  }),
-});
-const ResponseSchema = v.object({
-  payload: v.object({ listens: v.array(ListenSchema) }),
-});
+const ResponseSchema = RecentlyPlayedSchema;
+const key = btoa(
+  String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))),
+);
+const testEnv = (db: D1Database) =>
+  ({
+    DB: db,
+    CACHE: env.CACHE,
+    SPOTIFY_CLIENT_ID: "spotify-id",
+    SPOTIFY_CLIENT_SECRET: "spotify-secret",
+    SPOTIFY_ENCRYPTION_KEY: key,
+  }) as never;
 
 function resultsFor(sql: string, aliasRows: any[]) {
   if (sql.includes("track_aliases") && sql.includes("SELECT"))
@@ -81,26 +82,17 @@ async function timeAsync(fn: () => Promise<unknown>, runs = 5) {
 }
 
 const parsed = JSON.parse(fixtureRaw);
-const listens = parsed.payload.listens;
+const plays = parsed.items;
 const now = Math.floor(Date.now() / 1000);
 
+const playAt = (item: any) => Math.floor(Date.parse(item.played_at) / 1000);
+
 function toInputs(userId = 1, sourceId = 10) {
-  return listens.map((listen: any) => {
-    const info = listen.track_metadata.additional_info;
-    return {
-      kind: "listenbrainz",
-      sourceKey:
-        info?.recording_mbid ??
-        `${listen.track_metadata.artist_name}\t${listen.track_metadata.track_name}`,
-      artist: listen.track_metadata.artist_name,
-      title: listen.track_metadata.track_name,
-      mbid: info?.recording_mbid,
-      isrc: info?.isrc,
-      listenedAt: listen.listened_at,
-      userId,
-      sourceId,
-    };
-  });
+  return playInputs(
+    plays.map((item: any) => ({ at: playAt(item), track: item.track })),
+    userId,
+    sourceId,
+  );
 }
 
 describe("bench", () => {
@@ -112,11 +104,16 @@ describe("bench", () => {
     )
       .bind(now)
       .run();
+    const secret = await sealTokens(testEnv(env.DB), {
+      r: "refresh-1",
+      a: "access-1",
+      e: now + 3600,
+    });
     await env.DB.prepare(
-      `INSERT INTO sources (id, user_id, kind, account, cursor, backfill_before, next_pull_at)
-         VALUES (10, 1, 'listenbrainz', 'rob', NULL, NULL, ?1)`,
+      `INSERT INTO sources (id, user_id, kind, account, secret, next_pull_at)
+         VALUES (10, 1, 'spotify', 'rob', ?1, ?2)`,
     )
-      .bind(now)
+      .bind(secret, now)
       .run();
   });
 
@@ -143,11 +140,11 @@ describe("bench", () => {
     const stringifyNew = time(() => JSON.stringify(resolution.newTracks));
     const stringifyListens = time(() => JSON.stringify(resolution.listens));
 
-    const fakeEnv = { DB: fakeDb() } as any;
+    const fakeEnv = testEnv(fakeDb());
     const source = {
       id: 10,
       user_id: 1,
-      kind: "listenbrainz",
+      kind: "spotify",
       account: "rob",
       cursor: null,
       backfill_before: null,
@@ -155,54 +152,37 @@ describe("bench", () => {
       gap_floor: null,
       next_pull_at: now,
       idle_pulls: 0,
+      secret: await sealTokens(testEnv(fakeDb()), {
+        r: "r",
+        a: "a",
+        e: now + 3600,
+      }),
     };
-    const ok = (body: unknown): any => ({
-      status: 200,
-      body,
-      remaining: 29,
-      resetIn: 30,
-    });
-    const fetcher = async (url: string) => {
-      const params = new URL(url).searchParams;
-      if (params.has("max_ts")) return ok({ payload: { listens: [] } });
-      const wanted = Number(params.get("count"));
-      return ok({ payload: { listens: listens.slice(0, wanted) } });
-    };
+    const fetcher = (async (_input: RequestInfo | URL) =>
+      new Response(JSON.stringify({ items: plays }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
     const pullFake = await timeAsync(async () =>
-      pullListenBrainz(fakeEnv, { ...source }, fetcher, now),
-    );
-
-    const aliasRows = resolution.listens.map((listen: any, index: number) => ({
-      source_key: listen.sourceKey,
-      id: index + 1,
-      key: listen.trackKey,
-      mbid: null,
-      isrc: null,
-      artistKey: "a",
-      titleKey: "t",
-    }));
-    const fakeStoredEnv = { DB: fakeDb(aliasRows) } as any;
-    const storedSource = { ...source, cursor: now - 100 };
-    const pullFakeStored = await timeAsync(async () =>
-      pullListenBrainz(fakeStoredEnv, storedSource, fetcher, now),
+      pullSpotify(fakeEnv, { ...source }, fetcher, now),
     );
 
     const realSource = await env.DB.prepare(
       "SELECT * FROM sources WHERE id = 10",
     ).first<any>();
     const pullRealNew = await timeAsync(
-      async () => pullListenBrainz(env as any, { ...realSource }, fetcher, now),
+      async () => pullSpotify(testEnv(env.DB), { ...realSource }, fetcher, now),
       3,
     );
     const storedReal = await env.DB.prepare(
       "SELECT * FROM sources WHERE id = 10",
     ).first<any>();
     const pullRealStored = await timeAsync(
-      async () => pullListenBrainz(env as any, storedReal, fetcher, now + 900),
+      async () => pullSpotify(testEnv(env.DB), storedReal, fetcher, now + 900),
       3,
     );
 
-    console.log("=== bench: page of", listens.length, "listens ===");
+    console.log("=== bench: page of", plays.length, "plays ===");
     console.log("json parse        :", jsonParse.toFixed(2), "ms");
     console.log("valibot validate  :", validate.toFixed(2), "ms");
     console.log("normalize x2      :", normalize.toFixed(2), "ms");
@@ -211,7 +191,6 @@ describe("bench", () => {
     console.log("stringify newTracks:", stringifyNew.toFixed(2), "ms");
     console.log("stringify listens :", stringifyListens.toFixed(2), "ms");
     console.log("pull new (fake D1):", pullFake.toFixed(2), "ms");
-    console.log("pull stored(fakeD1):", pullFakeStored.toFixed(2), "ms");
     console.log("pull new (real D1):", pullRealNew.toFixed(2), "ms");
     console.log("pull stored(realD1):", pullRealStored.toFixed(2), "ms");
   });
@@ -288,7 +267,7 @@ async function seedListening(plays: number, tracks: number) {
     .run();
   await env.DB.prepare(
     `INSERT INTO sources (id, user_id, kind, account, next_pull_at)
-       VALUES (10, 1, 'listenbrainz', 'alice-lb', ?1)`,
+       VALUES (10, 1, 'spotify', 'alice-sp', ?1)`,
   )
     .bind(now)
     .run();

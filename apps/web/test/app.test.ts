@@ -26,7 +26,7 @@ async function seedUser(
     .run();
   await env.DB.prepare(
     `INSERT INTO sources (id, user_id, kind, account, cursor, backfill_before, next_pull_at)
-       VALUES (10, 1, 'listenbrainz', 'alice-lb', ?1, ?2, ?3)`,
+       VALUES (10, 1, 'spotify', 'alice-sp', ?1, ?2, ?3)`,
   )
     .bind(source.cursor ?? null, source.backfill_before ?? null, now)
     .run();
@@ -542,7 +542,7 @@ describe("profile API", () => {
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).toContain("<h1>alice</h1>");
-    expect(html).toContain("Sources: ListenBrainz, YouTube Music.");
+    expect(html).toContain("Sources: Spotify, YouTube Music.");
     expect(html).toMatch(/Updated\s*<time datetime="[^"]+">[\d-]+ [\d:]+ UTC/);
     expect(html).toContain('aria-current="page"');
   });

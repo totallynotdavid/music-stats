@@ -198,38 +198,31 @@ describe("profile", () => {
 });
 
 describe("sources", () => {
-  it("connects ListenBrainz, lists it and refuses a second one", async () => {
+  it("offers Connect Spotify and no ListenBrainz form", async () => {
     await seedUser();
-    expect(
-      (
-        await post("/settings/sources", {
-          kind: "listenbrainz",
-          account: "rob",
-        })
-      ).status,
-    ).toBe(303);
-    const source = await env.DB.prepare(
-      "SELECT kind, account, next_pull_at FROM sources WHERE user_id = 1",
-    ).first<{ kind: string; account: string; next_pull_at: number }>();
-    expect(source?.kind).toBe("listenbrainz");
-    expect(source?.account).toBe("rob");
-    expect(source?.next_pull_at).toBeGreaterThan(0);
-    expect(
-      (
-        await post("/settings/sources", {
-          kind: "listenbrainz",
-          account: "other",
-        })
-      ).status,
-    ).toBe(400);
-    expect((await get("/settings")).status).toBe(200);
-    expect(await (await get("/settings")).text()).toContain("rob");
+    const response = await get("/settings");
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("/auth/spotify");
+    expect(body).toContain("Connect Spotify");
+    expect(body).not.toContain("ListenBrainz");
+    expect(body).not.toContain('action="/settings/sources"');
+  });
+
+  it("lists a connected Spotify source", async () => {
+    await seedUser();
+    await env.DB.prepare(
+      "INSERT INTO sources (id, user_id, kind, account) VALUES (10, 1, 'spotify', 'spotify-user')",
+    ).run();
+    const body = await (await get("/settings")).text();
+    expect(body).toContain("Spotify");
+    expect(body).toContain("spotify-user");
   });
 
   it("removes a source and recounts all three totals", async () => {
     await seedUser();
     await env.DB.prepare(
-      "INSERT INTO sources (id, user_id, kind, account) VALUES (10, 1, 'listenbrainz', 'rob')",
+      "INSERT INTO sources (id, user_id, kind, account) VALUES (10, 1, 'spotify', 'spotify-user')",
     ).run();
     await env.DB.prepare(
       "INSERT INTO sources (id, user_id, kind) VALUES (11, 1, 'ytmusic')",
@@ -283,7 +276,7 @@ describe("sources", () => {
       .bind(now)
       .run();
     await env.DB.prepare(
-      "INSERT INTO sources (id, user_id, kind, account) VALUES (10, 1, 'listenbrainz', 'rob'), (20, 2, 'listenbrainz', 'bob')",
+      "INSERT INTO sources (id, user_id, kind, account) VALUES (10, 1, 'spotify', 'spotify-user'), (20, 2, 'spotify', 'bob')",
     ).run();
     await env.DB.prepare(
       "INSERT INTO artists (id, key, name) VALUES (1, 'artist', 'Artist')",
@@ -366,7 +359,7 @@ describe("export", () => {
   it("pages follow the next link to every play", async () => {
     await seedUser();
     await env.DB.prepare(
-      "INSERT INTO sources (id, user_id, kind, account) VALUES (10, 1, 'listenbrainz', 'rob')",
+      "INSERT INTO sources (id, user_id, kind, account) VALUES (10, 1, 'spotify', 'spotify-user')",
     ).run();
     await env.DB.prepare(
       "INSERT INTO artists (id, key, name) VALUES (1, 'artist', 'Artist')",
@@ -419,7 +412,7 @@ describe("export", () => {
   it("streams every play as NDJSON", async () => {
     await seedUser();
     await env.DB.prepare(
-      "INSERT INTO sources (id, user_id, kind, account) VALUES (10, 1, 'listenbrainz', 'rob')",
+      "INSERT INTO sources (id, user_id, kind, account) VALUES (10, 1, 'spotify', 'spotify-user')",
     ).run();
     await seedPlays();
     const response = await get("/settings/export");
@@ -430,7 +423,7 @@ describe("export", () => {
     const play = JSON.parse(lines[0]!);
     expect(play).toEqual({
       played_at: expect.any(Number),
-      source: "listenbrainz",
+      source: "spotify",
       ref: expect.any(String),
       artist: "Artist",
       title: "Track",
@@ -446,7 +439,7 @@ describe("deletion", () => {
     expect(await count("users")).toBe(1);
   });
 
-  it("a new person signs in, connects ListenBrainz, and deletes the account, and no row of theirs remains", async () => {
+  it("a new person signs in, connects a source, and deletes the account, and no row of theirs remains", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -493,14 +486,9 @@ describe("deletion", () => {
         }),
         testEnv() as never,
       );
-    expect(
-      (
-        await authed("/settings/sources", {
-          kind: "listenbrainz",
-          account: "newperson",
-        })
-      ).status,
-    ).toBe(303);
+    await env.DB.prepare(
+      "INSERT INTO sources (id, user_id, kind, account) VALUES (10, 1, 'spotify', 'newperson-sp')",
+    ).run();
     await authed("/settings/tokens", {});
     await env.DB.prepare(
       "INSERT INTO artists (id, key, name) VALUES (1, 'artist', 'Artist')",
@@ -509,7 +497,7 @@ describe("deletion", () => {
       "INSERT INTO tracks (id, key, artist_id, title) VALUES (1, 'artisttrack', 1, 'Track')",
     ).run();
     const source = await env.DB.prepare(
-      "SELECT id FROM sources WHERE kind = 'listenbrainz'",
+      "SELECT id FROM sources WHERE kind = 'spotify'",
     ).first<{ id: number }>();
     for (let i = 0; i < 5; i += 1) {
       await env.DB.prepare(
