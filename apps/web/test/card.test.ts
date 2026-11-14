@@ -54,8 +54,8 @@ describe("card", () => {
     await seedUser();
     const light = await (await fetchCard("?theme=light")).text();
     const dark = await (await fetchCard("?theme=dark")).text();
-    expect(light).toContain("oklch(99% 0.008 84)");
-    expect(dark).toContain("oklch(25% 0.03 70)");
+    expect(light).toContain("oklch(100% 0 0)");
+    expect(dark).toContain("oklch(23% 0.009 75)");
     expect(dark).not.toBe(light);
   });
 
