@@ -1,59 +1,76 @@
 import * as v from "valibot";
-import type { Listen, ListenFetcher } from "../src/listenbrainz";
 import {
-  listenBrainzFetcher,
-  listenInputs,
-  pullListenBrainz,
-  ResponseSchema,
-  storeListensPage,
-} from "../src/listenbrainz";
+  playInputs,
+  pullSpotify,
+  RecentlyPlayedSchema,
+  sealTokens,
+  type RecentlyPlayed,
+} from "../src/spotify";
 import { markDuplicates } from "../src/duplicates";
-import { resolvePageTracks } from "../src/matching";
+import { resolvePageTracks, storeListens } from "../src/matching";
 import type { Env, SourceRow } from "../src/types";
-import fixture from "../test/fixtures/listens-rob.json";
+import fixture from "../test/fixtures/spotify-recently-played.json";
 
-const page = { payload: { listens: fixture.payload.listens.slice(0, 200) } };
+const page = { items: fixture.items };
 const pageText = JSON.stringify(page);
-const pageListens = page.payload.listens as Listen[];
-const fixtureListens = fixture.payload.listens as Listen[];
-const fixtureSpan =
-  fixtureListens[0].listened_at -
-  fixtureListens[fixtureListens.length - 1].listened_at +
-  1;
-
-// A page of `n` listens: the fixture repeated, each copy older than the last,
-// so a page larger than the recording still holds `n` distinct plays.
-function listensOf(n: number): Listen[] {
-  if (n === pageListens.length) return pageListens;
-  return Array.from({ length: n }, (_, i) => {
-    const listen = fixtureListens[i % fixtureListens.length];
-    const copy = Math.floor(i / fixtureListens.length);
-    return { ...listen, listened_at: listen.listened_at - copy * fixtureSpan };
-  });
-}
-
-function sizeOf(url: URL) {
-  const n = Number(url.searchParams.get("n") ?? pageListens.length);
-  return Math.min(Math.max(Math.floor(n) || 1, 1), 1000);
-}
+const pagePlays = page.items as RecentlyPlayed[];
 
 const benchUserId = -1;
 const benchSourceId = -1;
 
-const benchSource: SourceRow = {
-  id: benchSourceId,
-  user_id: benchUserId,
-  kind: "listenbrainz",
-  account: "rob",
-  cursor: null,
-  backfill_before: null,
-  gap_before: null,
-  gap_floor: null,
-  next_pull_at: null,
-  idle_pulls: 0,
-};
+function playAt(item: RecentlyPlayed) {
+  return Math.floor(Date.parse(item.played_at) / 1000);
+}
 
-async function ensureBench(db: D1Database) {
+const toInputs = (items: RecentlyPlayed[]) =>
+  playInputs(
+    items.map((item) => ({ at: playAt(item), track: item.track })),
+    benchUserId,
+    benchSourceId,
+  );
+
+// A page of `n` plays: the fixture repeated, each copy older than the last,
+// so a page larger than the recording still holds `n` distinct plays.
+function playsOf(n: number): RecentlyPlayed[] {
+  const span =
+    playAt(pagePlays[0]!) - playAt(pagePlays[pagePlays.length - 1]!) + 1;
+  if (n === pagePlays.length) return pagePlays;
+  return Array.from({ length: n }, (_, i) => {
+    const item = pagePlays[i % pagePlays.length]!;
+    const copy = Math.floor(i / pagePlays.length);
+    return {
+      ...item,
+      played_at: new Date((playAt(item) - copy * span) * 1000).toISOString(),
+    };
+  });
+}
+
+function sizeOf(url: URL) {
+  const n = Number(url.searchParams.get("n") ?? pagePlays.length);
+  return Math.min(Math.max(Math.floor(n) || 1, 1), 1000);
+}
+
+const shiftPlays = (items: RecentlyPlayed[], run: number): RecentlyPlayed[] =>
+  items.map((item) => ({
+    ...item,
+    played_at: new Date((playAt(item) - run * 86_400) * 1000).toISOString(),
+  }));
+
+const fixtureFetcher =
+  (run: number, items: RecentlyPlayed[]): typeof fetch =>
+  async (input) => {
+    const url = input.toString();
+    if (url.startsWith("https://accounts.spotify.com/api/token"))
+      return Response.json({ access_token: "bench", expires_in: 3600 });
+    return Response.json({ items: shiftPlays(items, run) });
+  };
+
+async function ensureBench(db: D1Database, env: Env) {
+  const secret = await sealTokens(env, {
+    r: "bench-refresh",
+    a: "bench-access",
+    e: Math.floor(Date.now() / 1000) - 10,
+  });
   await db.batch([
     db
       .prepare(
@@ -63,10 +80,10 @@ async function ensureBench(db: D1Database) {
       .bind(benchUserId, benchUserId, Math.floor(Date.now() / 1000)),
     db
       .prepare(
-        `INSERT OR IGNORE INTO sources (id, user_id, kind, account)
-         VALUES (?1, ?2, 'listenbrainz', 'rob')`,
+        `INSERT OR IGNORE INTO sources (id, user_id, kind, account, secret)
+         VALUES (?1, ?2, 'spotify', 'bench', ?3)`,
       )
-      .bind(benchSourceId, benchUserId),
+      .bind(benchSourceId, benchUserId, secret),
   ]);
 }
 
@@ -91,44 +108,6 @@ async function reset(db: D1Database) {
     db.prepare("DELETE FROM users WHERE id = ?1").bind(benchUserId),
   ]);
 }
-
-const shiftListens = (listens: Listen[], run: number): Listen[] =>
-  listens.map((listen) => ({
-    ...listen,
-    listened_at: listen.listened_at - run * 86_400,
-  }));
-
-const shiftedFetcher =
-  (base: ListenFetcher, run: number): ListenFetcher =>
-  async (url) => {
-    const result = await base(url);
-    if (run === 0) return result;
-    const body = result.body as
-      | { payload?: { listens?: Listen[] } }
-      | undefined;
-    if (body?.payload?.listens) {
-      body.payload.listens = shiftListens(body.payload.listens, run);
-    }
-    return result;
-  };
-
-const fixtureFetcher =
-  (run: number, listens: Listen[]): ListenFetcher =>
-  async (url) => {
-    const params = new URL(url).searchParams;
-    if (params.has("max_ts")) {
-      return { status: 200, body: { payload: { listens: [] } } };
-    }
-    const count = Number(params.get("count")) || listens.length;
-    return {
-      status: 200,
-      body: {
-        payload: { listens: shiftListens(listens.slice(0, count), run) },
-      },
-      remaining: 29,
-      resetIn: 30,
-    };
-  };
 
 async function run(
   stage: (run: number) => unknown | Promise<unknown>,
@@ -159,7 +138,7 @@ async function seedDups(db: D1Database, kind: string) {
     db
       .prepare(
         `INSERT OR IGNORE INTO sources (id, user_id, kind, account)
-         VALUES (?1, ?2, 'listenbrainz', 'dups')`,
+         VALUES (?1, ?2, 'spotify', 'dups')`,
       )
       .bind(dupAnchorSourceId, dupUserId),
     db
@@ -262,62 +241,55 @@ export default {
       case "/parse":
         return report(
           "/parse",
-          await run(() => v.safeParse(ResponseSchema, page), repeat),
+          await run(() => v.safeParse(RecentlyPlayedSchema, page), repeat),
         );
-      case "/resolve": {
-        const inputs = listenInputs(
-          listensOf(sizeOf(url)),
-          benchUserId,
-          benchSourceId,
-        );
+      case "/resolve":
         return report(
           "/resolve",
-          await run(() => resolvePageTracks(inputs, new Map(), []), repeat),
+          await run(
+            () =>
+              resolvePageTracks(toInputs(playsOf(sizeOf(url))), new Map(), []),
+            repeat,
+          ),
         );
-      }
-      case "/store":
-        await ensureBench(env.DB);
+      case "/store": {
+        await ensureBench(env.DB, env);
         return report(
           "/store",
           await run(
             (run) =>
-              storeListensPage(
+              storeListens(
                 env.DB,
-                benchSource,
-                shiftListens(listensOf(sizeOf(url)), run),
+                playInputs(
+                  shiftPlays(playsOf(sizeOf(url)), run).map((item) => ({
+                    at: playAt(item),
+                    track: item.track,
+                  })),
+                  benchUserId,
+                  benchSourceId,
+                ),
+                "spotify",
               ),
             repeat,
           ),
         );
+      }
       case "/pull":
-        await ensureBench(env.DB);
+        await ensureBench(env.DB, env);
         try {
+          const row = await env.DB.prepare(
+            "SELECT * FROM sources WHERE id = ?1",
+          )
+            .bind(benchSourceId)
+            .first<SourceRow>();
           return report(
             "/pull",
             await run(
               (run) =>
-                pullListenBrainz(
+                pullSpotify(
                   env,
-                  { ...benchSource },
-                  fixtureFetcher(run, listensOf(sizeOf(url))),
-                ),
-              repeat,
-            ),
-          );
-        } finally {
-          await parkBenchSources(env.DB);
-        }
-      case "/pull-live":
-        await ensureBench(env.DB);
-        try {
-          return report(
-            "/pull-live",
-            await run(
-              (run) =>
-                pullListenBrainz(
-                  env,
-                  { ...benchSource },
-                  shiftedFetcher(listenBrainzFetcher, run),
+                  { ...row! },
+                  fixtureFetcher(run, playsOf(sizeOf(url))),
                 ),
               repeat,
             ),

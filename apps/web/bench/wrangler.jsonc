@@ -18,7 +18,4 @@
       "id": "0d3598a079d34bab8e6422847cb34fd9",
     },
   ],
-  "vars": {
-    "LISTENBRAINZ_BASE_URL": "https://api.listenbrainz.org",
-  },
 }
