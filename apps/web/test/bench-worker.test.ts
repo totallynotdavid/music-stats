@@ -14,7 +14,7 @@ const testEnv = () =>
     ...env,
     SPOTIFY_CLIENT_ID: "spotify-id",
     SPOTIFY_CLIENT_SECRET: "spotify-secret",
-    SPOTIFY_ENCRYPTION_KEY: key,
+    SOURCE_ENCRYPTION_KEY: key,
   }) as never;
 
 describe("bench worker", () => {

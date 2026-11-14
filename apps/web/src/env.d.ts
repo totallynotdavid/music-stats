@@ -6,7 +6,7 @@ declare namespace Cloudflare {
     GITHUB_CLIENT_SECRET?: string;
     SPOTIFY_CLIENT_ID?: string;
     SPOTIFY_CLIENT_SECRET?: string;
-    SPOTIFY_ENCRYPTION_KEY?: string;
+    SOURCE_ENCRYPTION_KEY?: string;
   }
 }
 

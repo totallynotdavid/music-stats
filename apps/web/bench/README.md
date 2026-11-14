@@ -14,8 +14,8 @@ npx wrangler dev
 ```
 
 It needs `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` and
-`SPOTIFY_ENCRYPTION_KEY` from `apps/web/.dev.vars` (wrangler reads
-`../.dev.vars` or the local `.dev.vars`).
+`SOURCE_ENCRYPTION_KEY` from `apps/web/.dev.vars` (wrangler reads `../.dev.vars`
+or the local `.dev.vars`).
 
 The routes:
 

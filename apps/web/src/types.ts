@@ -7,7 +7,7 @@ export interface Env {
   GITHUB_CLIENT_SECRET?: string;
   SPOTIFY_CLIENT_ID?: string;
   SPOTIFY_CLIENT_SECRET?: string;
-  SPOTIFY_ENCRYPTION_KEY?: string;
+  SOURCE_ENCRYPTION_KEY?: string;
 }
 
 export interface SourceRow {
@@ -22,8 +22,12 @@ export interface SourceRow {
   gap_floor: number | null;
   next_pull_at: number | null;
   idle_pulls: number;
+  tz?: string | null;
   status?: string;
   error?: string | null;
+  last_page?: string | null;
+  play_seq?: number;
+  gap_at?: number | null;
   play_count?: number;
 }
 

@@ -4,6 +4,7 @@ import * as v from "valibot";
 import { base64url, cookieClear, sessionUser } from "./auth";
 import { markDuplicates } from "./duplicates";
 import { storeListens } from "./matching";
+import { openSecret, sealSecret } from "./secret";
 import { idlePullDelay } from "./pull";
 import type { Env, SourceRow } from "./types";
 
@@ -55,40 +56,12 @@ interface StoredTokens {
   e?: number;
 }
 
-async function encryptionKey(env: Env) {
-  const raw = env.SPOTIFY_ENCRYPTION_KEY;
-  if (!raw) throw new Error("SPOTIFY_ENCRYPTION_KEY is not set");
-  const bytes = Uint8Array.from(atob(raw), (char) => char.charCodeAt(0));
-  if (bytes.length !== 32)
-    throw new Error("SPOTIFY_ENCRYPTION_KEY must hold 32 bytes in base64");
-  return crypto.subtle.importKey("raw", bytes, "AES-GCM", false, [
-    "encrypt",
-    "decrypt",
-  ]);
-}
-
 export async function sealTokens(env: Env, tokens: StoredTokens) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const plain = new TextEncoder().encode(JSON.stringify(tokens));
-  const sealed = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    await encryptionKey(env),
-    plain,
-  );
-  const blob = new Uint8Array(iv.length + sealed.byteLength);
-  blob.set(iv);
-  blob.set(new Uint8Array(sealed), iv.length);
-  return blob;
+  return sealSecret(env, JSON.stringify(tokens));
 }
 
 export async function openTokens(env: Env, secret: ArrayBuffer | Uint8Array) {
-  const blob = secret instanceof Uint8Array ? secret : new Uint8Array(secret);
-  const plain = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: blob.slice(0, 12) },
-    await encryptionKey(env),
-    blob.slice(12),
-  );
-  return JSON.parse(new TextDecoder().decode(plain)) as StoredTokens;
+  return JSON.parse(await openSecret(env, secret)) as StoredTokens;
 }
 
 function credentials(context: Context<{ Bindings: Env }>) {
