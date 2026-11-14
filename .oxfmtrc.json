@@ -1,5 +1,9 @@
 {
   "printWidth": 80,
   "proseWrap": "always",
-  "ignorePatterns": ["**/*.toml", "crates/music-stats/tests/fixtures/**"]
+  "ignorePatterns": [
+    "**/*.toml",
+    "crates/music-stats/tests/fixtures/**",
+    "apps/web/test/fixtures/history.html"
+  ]
 }
