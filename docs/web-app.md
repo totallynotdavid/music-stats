@@ -1,9 +1,8 @@
 # Web app
 
-This document is the design of the hosted music-stats service. Nothing in it is
-built yet. The command-line program that [Architecture](architecture.md)
-describes stays as it is, except where [the crate section](#the-rust-crate) says
-otherwise.
+This document is the design of the hosted music-stats service. The command-line
+program that [Architecture](architecture.md) describes stays as it is, except
+where [the crate section](#the-rust-crate) says otherwise.
 
 The service gives each person a public listening profile at `/u/NAME`, a JSON
 API at `/u/NAME.json` and an SVG card at `/u/NAME.svg` for a README, each with a
@@ -12,10 +11,10 @@ history page holds about 200 plays and Spotify's recently-played endpoint holds
 50, so the service stores every play it sees and the history grows with time.
 
 ```text
-Spotify ── Cron Trigger pulls ────────────────────────┐
-                                                        ▼
+Spotify ─────── Cron Trigger pulls ─────────────────┐
+                                                    ▼
 YouTube Music ── user's GitHub Action ── POST ──▶ Worker ──▶ D1 (plays)
-                                                   │          KV (snapshots)
+             └─ Cron Trigger pulls ────────────▶   │          KV (snapshots)
 Phone ── Pano Scrobbler ── POST ──────────────────▶  │
                                                    ▼
                          /u/NAME    /u/NAME.json    /u/NAME.svg
@@ -49,9 +48,10 @@ apps/web/
 
 The Worker is TypeScript, for these reasons:
 
-- The Worker shares no code with the crate. The crate parses the YouTube page,
-  and the Worker never sees that page or the cookie. The things the Worker owns,
-  such as matching and aggregation, exist nowhere in the crate.
+- The Worker shares no code with the crate. Each holds its own YouTube page
+  parser, the crate in Rust for the GitHub Action path and the Worker in
+  TypeScript for the pulled path. The things the Worker owns, such as matching
+  and aggregation, exist nowhere in the crate.
 - workers-rs adds a wasm build step and a second toolchain to every Worker
   change. TypeScript runs on the platform's own runtime.
 - The Worker renders the pages too, so one language covers routing, SQL and
@@ -134,6 +134,7 @@ CREATE TABLE sources (
   gap_at INTEGER,
   maybe_missing INTEGER NOT NULL DEFAULT 0,
   play_count INTEGER NOT NULL DEFAULT 0,
+  tz TEXT,
   UNIQUE (user_id, kind)
 );
 CREATE INDEX sources_due ON sources (next_pull_at)
@@ -275,16 +276,17 @@ What each part decides:
   back after a deletion, so a cached snapshot never reaches a new account.
 - **`sources`.** A user has at most one source of each kind. `account` is the
   Spotify user id, and is null for YouTube Music. `secret` holds the Spotify
-  refresh token, encrypted with AES-GCM under a Worker secret, so a leaked
-  database dump holds no usable credential. `cursor` is the newest play
-  ingested. `backfill_before`, `gap_before` and `gap_floor` remain from a
-  removed history walk and are unused. `next_pull_at` is null for YouTube Music,
-  which pushes. `idle_pulls` drives the back-off in
-  [Pulled sources](#pulled-sources). Three columns serve YouTube Music only.
-  `last_page` is the ordered list of `[day, video id]` pairs of the last
-  accepted upload, as JSON, and `play_seq` counts the plays stored so far.
-  `gap_at` is the time of the last upload that overlapped nothing, and
-  `status = 'gap'` marks the source until an upload overlaps again.
+  refresh token or the YouTube Music cookie, encrypted with AES-GCM under the
+  `SOURCE_ENCRYPTION_KEY` Worker secret, so a leaked database dump holds no
+  usable credential. `cursor` is the newest play ingested. `backfill_before`,
+  `gap_before` and `gap_floor` remain from a removed history walk and are
+  unused. `next_pull_at` is null for a source that only pushes. `idle_pulls`
+  drives the back-off in [Pulled sources](#pulled-sources). `tz` is the IANA
+  time zone the YouTube pull resolves "Today" and "Yesterday" in. Three columns
+  serve YouTube Music only. `last_page` is the ordered list of `[day, video id]`
+  pairs of the last accepted upload, as JSON, and `play_seq` counts the plays
+  stored so far. `gap_at` is the time of the last upload that overlapped
+  nothing, and `status = 'gap'` marks the source until an upload overlaps again.
   `maybe_missing` is the most plays that repeated songs may have hidden so far.
   Only an upload that changes the page adds to it, and a replay of the stored
   page never does ([Aligning a page](#aligning-a-page-with-the-last-one)).
@@ -720,6 +722,20 @@ Workers Paid
   returns at most 50 plays and no older history, so a source must be pulled
   before the user has played 50 more tracks. About 3 minutes a track means two
   and a half hours, and the back-off never exceeds 1 hour.
+- **YouTube Music.** `GET https://music.youtube.com/history` with the stored
+  cookie and a `SAPISIDHASH` authorization header, exactly as the crate's Action
+  does. A pull comes due every hour on a fixed interval: the page holds about
+  200 plays, roughly ten hours of continuous listening, so an hour leaves a
+  tenfold margin and costs 24 fetches a day. The Worker's TypeScript parser
+  reads the page the same way the crate does, resolving "Today" and "Yesterday"
+  in the source's `tz`, and drops every play that has no day. The page then
+  takes the same alignment, storage, gap and duplicate path as an upload, so a
+  pull and an upload to the same source never store a play twice. A pull that
+  finds the cookie signed out, or a page that no longer parses, sets
+  `status = 'error'` with a plain message such as "YouTube signed you out. Paste
+  a new cookie." and clears `next_pull_at`, so pulls stop until the user saves a
+  new cookie. A network failure or a non-200 answer is transient and retries
+  with the usual back-off.
 - **Back-off.** A pull that finds plays sets `idle_pulls` to 0 and comes due
   again in 20 minutes. An empty pull adds 1 to `idle_pulls` and sets the delay
   to `15 minutes × 2^idle_pulls`, capped at 60 minutes so the 50-play window is
@@ -779,10 +795,17 @@ and keeps no token, so the permissions model of a GitHub App buys nothing.
 - A form that changes state is a `POST` and the Worker checks that `Origin`
   equals the site origin. `SameSite=Lax` does the rest. The upload endpoint uses
   a bearer token and no cookie, so it has no CSRF exposure.
-- Spotify is proven by the OAuth flow, YouTube Music plays arrive only with an
-  upload token and phone plays only with a scrobbler token, so no source can be
-  claimed by name. The submit routes are token-authenticated API routes, outside
-  the `Origin` check.
+- Spotify is proven by the OAuth flow, YouTube Music plays arrive pulled with
+  the stored cookie or pushed with an upload token and phone plays only with a
+  scrobbler token, so no source can be claimed by name. The submit routes are
+  token-authenticated API routes, outside the `Origin` check.
+- **The YouTube Music cookie grants full access to the user's Google account.**
+  The settings form accepts it only over `POST` behind the `Origin` check,
+  validates it against the history page, and stores it AES-GCM encrypted in
+  `sources.secret`. It is never logged, rendered back into a page, returned in
+  JSON or an error message, or stored unencrypted, and a fetch failure message
+  never echoes the request headers. Removing the source deletes it, and
+  "Disconnect cookie" clears it alone while the plays and an upload token stay.
 
 **Privacy.** A profile is public by default. The settings page has one switch,
 `is_public`. A hidden profile answers `404` on all three addresses. The first
@@ -792,8 +815,9 @@ sign-in screen states that profiles are public.
 
 - **Remove a source.** One `db.batch()` deletes that source's `plays`, its
   `tokens` and the `sources` row, then recounts `track_totals`, `daily_totals`
-  and `artist_totals` for the user. The Spotify refresh token goes with the row.
-  The user can also revoke the app in their Spotify account.
+  and `artist_totals` for the user. The Spotify refresh token or YouTube Music
+  cookie goes with the row. The user can also revoke the app in their Spotify
+  account, or disconnect only the YouTube Music cookie and keep the plays.
 - **Delete the account.** The user types their name to confirm. One batch
   deletes `plays`, `track_totals`, `daily_totals`, `artist_totals`, `tokens`,
   `sources`, `sessions` and the `users` row, in that order, so no foreign key

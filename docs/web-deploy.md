@@ -138,12 +138,13 @@ npx wrangler secret put SPOTIFY_CLIENT_ID
 npx wrangler secret put SPOTIFY_CLIENT_SECRET
 ```
 
-The refresh tokens live in `sources.secret`, AES-GCM encrypted. Generate a
-32-byte key, print it as base64, and store it too:
+The refresh tokens and YouTube Music cookies live in `sources.secret`, AES-GCM
+encrypted under one key. Generate a 32-byte key, print it as base64, and store
+it too:
 
 ```sh
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" \
-  | npx wrangler secret put SPOTIFY_ENCRYPTION_KEY
+  | npx wrangler secret put SOURCE_ENCRYPTION_KEY
 ```
 
 For local development put the same values in `apps/web/.dev.vars`, and do not
@@ -152,15 +153,26 @@ commit that file:
 ```sh
 SPOTIFY_CLIENT_ID=the-client-id
 SPOTIFY_CLIENT_SECRET=the-local-client-secret
-SPOTIFY_ENCRYPTION_KEY=the-base64-key
+SOURCE_ENCRYPTION_KEY=the-base64-key
 ```
 
 Users sign in with GitHub and connect Spotify on the settings page. The cron
 trigger pulls the source on the next minute.
 
+## Connect YouTube Music
+
+The user connects YouTube Music themselves on the settings page: they paste the
+`Cookie` request header of `music.youtube.com`, copied from their browser's
+developer tools, and pick their IANA time zone. The Worker checks the cookie
+against the history page, stores it AES-GCM encrypted, imports the page's plays
+at once, and pulls the page every hour from then on. The source needs no
+Worker-side YouTube secret: `SOURCE_ENCRYPTION_KEY` above covers the stored
+cookie.
+
 ## Add a YouTube Music upload token
 
-An upload token lets the user's GitHub Action post plays to
+An upload token is the secondary way in, for a user who keeps their GitHub
+Action and does not paste a cookie. It lets the Action post plays to
 `POST /api/v1/upload`. The database keeps only the token's SHA-256 hash, so
 create the token after the user has a `ytmusic` source.
 
