@@ -1,4 +1,3 @@
-import { pullLastFm } from "./lastfm";
 import { pullListenBrainz } from "./listenbrainz";
 import {
   dailyLimitPattern,
@@ -14,7 +13,6 @@ const pulls: Record<
   string,
   (env: Env, source: SourceRow, now: number) => Promise<unknown>
 > = {
-  lastfm: (env, source, now) => pullLastFm(env, source, undefined, now),
   listenbrainz: (env, source, now) =>
     pullListenBrainz(env, source, undefined, now),
 };
@@ -30,10 +28,10 @@ export async function pullDueSources(
       `SELECT id, user_id, kind, account, cursor, backfill_before, gap_before,
        gap_floor, next_pull_at, idle_pulls
        FROM sources WHERE next_pull_at IS NOT NULL AND next_pull_at <= ?1
-       AND (kind != 'lastfm' OR ?2)
+       AND kind = 'listenbrainz'
        ORDER BY next_pull_at, id LIMIT ${maxSourcesPerPull}`,
     )
-      .bind(now, env.LASTFM_APPROVAL ? 1 : 0)
+      .bind(now)
       .all<SourceRow>();
   } catch (error) {
     if (error instanceof Error && dailyLimitPattern.test(error.message)) {

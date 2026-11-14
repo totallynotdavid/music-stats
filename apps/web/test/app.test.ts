@@ -545,7 +545,6 @@ describe("profile API", () => {
     expect(html).toContain("Sources: ListenBrainz, YouTube Music.");
     expect(html).toMatch(/Updated\s*<time datetime="[^"]+">[\d-]+ [\d:]+ UTC/);
     expect(html).toContain('aria-current="page"');
-    expect(html).not.toContain("AudioScrobbler");
   });
 
   it("pins the snapshot JSON for a fixed set of plays", async () => {

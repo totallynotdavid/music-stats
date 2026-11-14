@@ -68,15 +68,12 @@ interface ExportRow {
   title: string;
 }
 
-const sourceKinds = ["listenbrainz", "lastfm"] as const;
-
 function dayText(timestamp: number | null) {
   if (timestamp === null) return "never";
   return new Date(timestamp * 1000).toISOString().slice(0, 10);
 }
 
-function sourceStatus(source: SourceInfo, lastFmApproved: boolean) {
-  if (source.kind === "lastfm" && !lastFmApproved) return "paused";
+function sourceStatus(source: SourceInfo) {
   if (source.status === "gap")
     return "uploads lost touch; plays between the last aligned upload and the next one may be missing";
   if (source.status === "error")
@@ -98,9 +95,9 @@ export function signInPage() {
         <div class="page-head">
           <h1>Sign in</h1>
           <p>
-            Music stats stores the plays you connect from ListenBrainz, Last.fm,
-            YouTube Music and Spotify. It shows your top tracks, top artists and
-            plays per day on a public page at <code>/u/name</code>.
+            Music stats stores the plays you connect from ListenBrainz and
+            YouTube Music. It shows your top tracks, top artists and plays per
+            day on a public page at <code>/u/name</code>.
           </p>
         </div>
         <div class="stack">
@@ -129,9 +126,9 @@ function settingsPage(
   user: SignedInUser,
   sources: SourceInfo[],
   tokens: TokenInfo[],
-  options: PageOptions & { lastFmApproved: boolean },
+  options: PageOptions,
 ) {
-  const { notice, error, field, issuedToken, lastFmApproved } = options;
+  const { notice, error, field, issuedToken } = options;
   const fieldError = (name: string) =>
     field === name && error ? (
       <p class="form-error" id={`${name}-error`} role="alert">
@@ -229,8 +226,7 @@ function settingsPage(
           <div class="section-body">
             {sources.length === 0 ? (
               <p class="muted">
-                No sources connected. Add a ListenBrainz or Last.fm account
-                below.
+                No sources connected. Add a ListenBrainz account below.
               </p>
             ) : (
               <ul class="rows">
@@ -240,7 +236,7 @@ function settingsPage(
                       <b>{sourceNames[source.kind] ?? source.kind}</b>
                       <small>
                         {source.account ?? "upload token"} ·{" "}
-                        {sourceStatus(source, lastFmApproved)}
+                        {sourceStatus(source)}
                         {sourceNote(source) !== null && (
                           <> · {sourceNote(source)}</>
                         )}
@@ -256,15 +252,7 @@ function settingsPage(
             )}
             <form method="post" action="/settings/sources" class="form-row">
               <div class="field">
-                <label for="source-kind">Service</label>
-                <select id="source-kind" name="kind">
-                  {sourceKinds.map((kind) => (
-                    <option value={kind}>{sourceNames[kind]}</option>
-                  ))}
-                </select>
-              </div>
-              <div class="field">
-                <label for="source-account">Username</label>
+                <label for="source-account">ListenBrainz username</label>
                 {fieldError("source")}
                 <input
                   id="source-account"
@@ -281,8 +269,8 @@ function settingsPage(
               </div>
             </form>
             <small class="hint">
-              The service reads the public ListenBrainz or Last.fm history of
-              the account you name.
+              The service reads the public listen history of the account you
+              name.
             </small>
           </div>
         </section>
@@ -487,10 +475,7 @@ function render(
   status: 200 | 400 = 200,
 ) {
   return context.html(
-    settingsPage(data.user, data.sources, data.tokens, {
-      lastFmApproved: Boolean(context.env.LASTFM_APPROVAL),
-      ...options,
-    }),
+    settingsPage(data.user, data.sources, data.tokens, options),
     status,
   );
 }
@@ -569,36 +554,29 @@ settingsApp.post("/profile", async (context) => {
 
 settingsApp.post("/sources", async (context) => {
   const user = context.get("user");
-  const kind = await form(context, "kind");
   const account = await form(context, "account");
   const data = await pageData(context);
-  if (
-    !sourceKinds.includes(kind as (typeof sourceKinds)[number]) ||
-    !/^\S{1,100}$/.test(account)
-  )
+  if (!/^\S{1,100}$/.test(account))
     return render(
       context,
       data,
-      {
-        error: "Pick a service and enter the account name.",
-        field: "source",
-      },
+      { error: "Enter the ListenBrainz username.", field: "source" },
       400,
     );
   const now = Math.floor(Date.now() / 1000);
   try {
     await context.env.DB.prepare(
       `INSERT INTO sources (user_id, kind, account, next_pull_at)
-       VALUES (?1, ?2, ?3, ?4)`,
+       VALUES (?1, 'listenbrainz', ?2, ?3)`,
     )
-      .bind(user.id, kind, account, now)
+      .bind(user.id, account, now)
       .run();
   } catch {
     return render(
       context,
       data,
       {
-        error: `A ${sourceNames[kind]} source is already connected.`,
+        error: "A ListenBrainz source is already connected.",
         field: "source",
       },
       400,

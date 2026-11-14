@@ -1,11 +1,4 @@
 import * as v from "valibot";
-import type { LastFmTrack } from "../src/lastfm";
-import {
-  pullLastFm,
-  ResponseSchema as LastFmResponseSchema,
-  storeTracksPage,
-  trackInputs,
-} from "../src/lastfm";
 import type { Listen, ListenFetcher } from "../src/listenbrainz";
 import {
   listenBrainzFetcher,
@@ -18,7 +11,6 @@ import { markDuplicates } from "../src/duplicates";
 import { resolvePageTracks } from "../src/matching";
 import type { Env, SourceRow } from "../src/types";
 import fixture from "../test/fixtures/listens-rob.json";
-import lastFmFixture from "../test/fixtures/recenttracks";
 
 const page = { payload: { listens: fixture.payload.listens.slice(0, 200) } };
 const pageText = JSON.stringify(page);
@@ -44,13 +36,9 @@ function sizeOf(url: URL) {
   const n = Number(url.searchParams.get("n") ?? pageListens.length);
   return Math.min(Math.max(Math.floor(n) || 1, 1), 1000);
 }
-const pageTracks = lastFmFixture.recenttracks.track
-  .filter((track) => "date" in track)
-  .slice(0, 200) as LastFmTrack[];
 
 const benchUserId = -1;
 const benchSourceId = -1;
-const lastFmSourceId = -2;
 
 const benchSource: SourceRow = {
   id: benchSourceId,
@@ -63,13 +51,6 @@ const benchSource: SourceRow = {
   gap_floor: null,
   next_pull_at: null,
   idle_pulls: 0,
-};
-
-const lastFmSource: SourceRow = {
-  ...benchSource,
-  id: lastFmSourceId,
-  kind: "lastfm",
-  account: "fixture",
 };
 
 async function ensureBench(db: D1Database) {
@@ -86,12 +67,6 @@ async function ensureBench(db: D1Database) {
          VALUES (?1, ?2, 'listenbrainz', 'rob')`,
       )
       .bind(benchSourceId, benchUserId),
-    db
-      .prepare(
-        `INSERT OR IGNORE INTO sources (id, user_id, kind, account)
-         VALUES (?1, ?2, 'lastfm', 'fixture')`,
-      )
-      .bind(lastFmSourceId, benchUserId),
   ]);
 }
 
@@ -111,7 +86,6 @@ async function reset(db: D1Database) {
       .prepare("DELETE FROM artist_totals WHERE user_id = ?1")
       .bind(benchUserId),
     db.prepare("DELETE FROM tokens WHERE source_id = ?1").bind(benchSourceId),
-    db.prepare("DELETE FROM tokens WHERE source_id = ?1").bind(lastFmSourceId),
     db.prepare("DELETE FROM sessions WHERE user_id = ?1").bind(benchUserId),
     db.prepare("DELETE FROM sources WHERE user_id = ?1").bind(benchUserId),
     db.prepare("DELETE FROM users WHERE id = ?1").bind(benchUserId),
@@ -123,19 +97,6 @@ const shiftListens = (listens: Listen[], run: number): Listen[] =>
     ...listen,
     listened_at: listen.listened_at - run * 86_400,
   }));
-
-const shiftTracks = (tracks: LastFmTrack[], run: number): LastFmTrack[] =>
-  tracks.map((track) =>
-    track.date === undefined
-      ? track
-      : {
-          ...track,
-          date: {
-            ...track.date,
-            uts: String(Number(track.date.uts) - run * 86_400),
-          },
-        },
-  );
 
 const shiftedFetcher =
   (base: ListenFetcher, run: number): ListenFetcher =>
@@ -168,20 +129,6 @@ const fixtureFetcher =
       resetIn: 30,
     };
   };
-
-const lastFmFixtureFetcher = (run: number) => async (url: string) => {
-  const params = new URL(url).searchParams;
-  if (params.has("to")) {
-    return { status: 200, body: { recenttracks: { track: [] } } };
-  }
-  const limit = Number(params.get("limit")) || pageTracks.length;
-  return {
-    status: 200,
-    body: {
-      recenttracks: { track: shiftTracks(pageTracks.slice(0, limit), run) },
-    },
-  };
-};
 
 async function run(
   stage: (run: number) => unknown | Promise<unknown>,
@@ -317,14 +264,6 @@ export default {
           "/parse",
           await run(() => v.safeParse(ResponseSchema, page), repeat),
         );
-      case "/parse-lastfm":
-        return report(
-          "/parse-lastfm",
-          await run(
-            () => v.safeParse(LastFmResponseSchema, lastFmFixture),
-            repeat,
-          ),
-        );
       case "/resolve": {
         const inputs = listenInputs(
           listensOf(sizeOf(url)),
@@ -333,20 +272,6 @@ export default {
         );
         return report(
           "/resolve",
-          await run(() => resolvePageTracks(inputs, new Map(), []), repeat),
-        );
-      }
-      case "/resolve-lastfm": {
-        const inputs = trackInputs(
-          pageTracks.filter(
-            (track): track is LastFmTrack & { date: { uts: string } } =>
-              track.date !== undefined,
-          ),
-          benchUserId,
-          lastFmSourceId,
-        );
-        return report(
-          "/resolve-lastfm",
           await run(() => resolvePageTracks(inputs, new Map(), []), repeat),
         );
       }
@@ -360,20 +285,6 @@ export default {
                 env.DB,
                 benchSource,
                 shiftListens(listensOf(sizeOf(url)), run),
-              ),
-            repeat,
-          ),
-        );
-      case "/lastfm-store":
-        await ensureBench(env.DB);
-        return report(
-          "/lastfm-store",
-          await run(
-            (run) =>
-              storeTracksPage(
-                env.DB,
-                lastFmSource,
-                shiftTracks(pageTracks, run),
               ),
             repeat,
           ),
@@ -414,28 +325,8 @@ export default {
         } finally {
           await parkBenchSources(env.DB);
         }
-      case "/lastfm":
-        await ensureBench(env.DB);
-        try {
-          return report(
-            "/lastfm",
-            await run(
-              (run) =>
-                pullLastFm(
-                  { ...env, LASTFM_API_KEY: "bench" },
-                  { ...lastFmSource },
-                  lastFmFixtureFetcher(run),
-                  Math.floor(Date.now() / 1000),
-                  0,
-                ),
-              repeat,
-            ),
-          );
-        } finally {
-          await parkBenchSources(env.DB);
-        }
       case "/dups-seed":
-        await seedDups(env.DB, url.searchParams.get("kind") ?? "lastfm");
+        await seedDups(env.DB, url.searchParams.get("kind") ?? "ytmusic");
         return new Response("seeded\n");
       case "/dups-reset": {
         const result = await env.DB.prepare(

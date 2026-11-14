@@ -11,7 +11,6 @@ const session = `sess_${"s".repeat(40)}`;
 const testEnv = () => ({
   DB: env.DB,
   CACHE: env.CACHE,
-  LASTFM_APPROVAL: "",
   GITHUB_CLIENT_ID: "test-client-id",
   GITHUB_CLIENT_SECRET: "test-client-secret",
 });
@@ -225,13 +224,6 @@ describe("sources", () => {
     ).toBe(400);
     expect((await get("/settings")).status).toBe(200);
     expect(await (await get("/settings")).text()).toContain("rob");
-  });
-
-  it("marks a Last.fm source as paused while approval is empty", async () => {
-    await seedUser();
-    await post("/settings/sources", { kind: "lastfm", account: "fm-user" });
-    const body = await (await get("/settings")).text();
-    expect(body).toContain("fm-user · paused");
   });
 
   it("removes a source and recounts all three totals", async () => {

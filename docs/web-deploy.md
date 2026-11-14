@@ -136,34 +136,6 @@ curl -i 'https://music.rising.sh/u/alice'
 curl -i 'https://music.rising.sh/u/alice.json?period=week'
 ```
 
-## Add a Last.fm source
-
-Last.fm data is behind a launch gate: the cron does not pull it, and the profile
-shows only the user's other sources, until `LASTFM_APPROVAL` in
-[`apps/web/wrangler.jsonc`](../apps/web/wrangler.jsonc) is set. It stays empty
-until Last.fm approves the service in writing. Do not set it without that
-approval.
-
-Create a Last.fm API account at
-[https://www.last.fm/api/account/create](https://www.last.fm/api/account/create)
-and store its API key as a Worker secret, from `apps/web/`:
-
-```sh
-npx wrangler secret put LASTFM_API_KEY
-```
-
-Add the source against the remote D1 database:
-
-```sh
-npx wrangler d1 execute music-stats --remote --command \
-  "INSERT INTO sources (user_id, kind, account, next_pull_at)
-   VALUES ((SELECT id FROM users WHERE name = 'alice'), 'lastfm', 'alice-fm', unixepoch());"
-```
-
-The source account is the public Last.fm username. After approval is set and
-deployed, the cron pulls the source and the profile names Last.fm and carries
-the AudioScrobbler credit.
-
 ## Add a YouTube Music upload token
 
 An upload token lets the user's GitHub Action post plays to

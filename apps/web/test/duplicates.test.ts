@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it } from "vitest";
 import migrations from "virtual:web-migrations";
 import { app } from "../src/app";
 import { markDuplicates } from "../src/duplicates";
-import { pullLastFm } from "../src/lastfm";
 import { pullListenBrainz } from "../src/listenbrainz";
 import type { SourceRow } from "../src/types";
 
@@ -537,8 +536,8 @@ describe("cross-source duplicates", () => {
     );
   }
 
-  it("a user with ListenBrainz and YouTube Music, or with ListenBrainz and Last.fm, on one listening app shows each play once", async () => {
-    const kinds = ["lastfm", "listenbrainz", "ytmusic"];
+  it("a user with ListenBrainz and YouTube Music on one listening app shows each play once", async () => {
+    const kinds = ["listenbrainz", "ytmusic"];
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO users (id, github_id, name, created_at) VALUES (1, 1, 'alice', ?1)",
@@ -564,8 +563,6 @@ describe("cross-source duplicates", () => {
         "INSERT INTO tokens (source_id, hash, hint, created_at) VALUES (?1, ?2, ?3, ?4)",
       ).bind(sourceIds.ytmusic, await hash(token), token.slice(-4), now),
     ]);
-    env.LASTFM_API_KEY = "test-key";
-    env.LASTFM_APPROVAL = "local";
 
     const times = [
       Date.parse(`${dayText}T08:00:00.000Z`) / 1000,
@@ -582,40 +579,6 @@ describe("cross-source duplicates", () => {
       track_name: "Song B",
       additional_info: {},
     };
-
-    const fmTracks = [
-      {
-        name: "Song A",
-        artist: { "#text": "Artist One" },
-        date: { uts: String(times[0] + 5) },
-      },
-      {
-        name: "Song B",
-        artist: { "#text": "Artist Two" },
-        date: { uts: String(times[1] + 5) },
-      },
-      {
-        name: "Song A",
-        artist: { "#text": "Artist One" },
-        date: { uts: String(times[2] + 5) },
-      },
-    ];
-    const fmFetcher = async (url: string) => ({
-      status: 200,
-      body: {
-        recenttracks: {
-          track: new URL(url).searchParams.has("to") ? [] : fmTracks,
-        },
-      },
-    });
-    const fmPull = await pullLastFm(
-      env,
-      await sourceRow("lastfm"),
-      fmFetcher,
-      now,
-      0,
-    );
-    expect(fmPull.inserted).toBe(3);
 
     const listens = [
       { listened_at: times[2], track_metadata: songA },
@@ -656,7 +619,6 @@ describe("cross-source duplicates", () => {
       ),
     ).toEqual({
       listenbrainz: [3, 0],
-      lastfm: [3, 3],
       ytmusic: [3, 3],
     });
 
@@ -686,7 +648,7 @@ describe("cross-source duplicates", () => {
 
     const profile = await app.fetch(
       new Request("https://music.rising.sh/u/alice.json?period=all"),
-      { DB: env.DB, LASTFM_APPROVAL: "local" },
+      { DB: env.DB },
     );
     expect(profile.status).toBe(200);
     expect(await profile.json()).toMatchObject({
