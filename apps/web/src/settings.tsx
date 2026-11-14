@@ -57,6 +57,7 @@ interface TokenInfo {
   hint: string;
   created_at: number;
   last_used_at: number | null;
+  kind: string;
 }
 
 interface ExportRow {
@@ -120,6 +121,7 @@ interface PageOptions {
   error?: string;
   field?: string;
   issuedToken?: string;
+  issuedKind?: string;
 }
 
 function settingsPage(
@@ -127,8 +129,34 @@ function settingsPage(
   sources: SourceInfo[],
   tokens: TokenInfo[],
   options: PageOptions,
+  origin: string,
 ) {
-  const { notice, error, field, issuedToken } = options;
+  const { notice, error, field, issuedToken, issuedKind } = options;
+  const uploadTokens = tokens.filter((token) => token.kind === "ytmusic");
+  const scrobblerTokens = tokens.filter(
+    (token) => token.kind === "listenbrainz",
+  );
+  const tokenList = (items: TokenInfo[]) => (
+    <ul class="rows">
+      {items.map((token) => (
+        <li key={token.id}>
+          <span class="track">
+            <b>
+              <code>…{token.hint}</code>
+            </b>
+            <small>
+              created {dayText(token.created_at)} · last used{" "}
+              {dayText(token.last_used_at)}
+            </small>
+          </span>
+          <form method="post" action="/settings/tokens/revoke">
+            <input type="hidden" name="id" value={token.id} />
+            <button type="submit">Revoke</button>
+          </form>
+        </li>
+      ))}
+    </ul>
+  );
   const fieldError = (name: string) =>
     field === name && error ? (
       <p class="form-error" id={`${name}-error`} role="alert">
@@ -167,8 +195,11 @@ function settingsPage(
         {notice !== undefined && <p class="notice">{notice}</p>}
         {topError}
         {issuedToken !== undefined && (
-          <section class="notice" aria-label="New upload token">
-            <p>Your new upload token. It is shown once. Store it now.</p>
+          <section class="notice" aria-label="New token">
+            <p>
+              Your new {issuedKind === "listenbrainz" ? "scrobbler" : "upload"}{" "}
+              token. It is shown once. Store it now.
+            </p>
             <code class="token">{issuedToken}</code>
           </section>
         )}
@@ -233,8 +264,11 @@ function settingsPage(
                     <span class="track">
                       <b>{sourceNames[source.kind] ?? source.kind}</b>
                       <small>
-                        {source.account ?? "upload token"} ·{" "}
-                        {sourceStatus(source)}
+                        {source.account ??
+                          (source.kind === "ytmusic"
+                            ? "upload token"
+                            : "scrobbler token")}{" "}
+                        · {sourceStatus(source)}
                         {sourceNote(source) !== null && (
                           <> · {sourceNote(source)}</>
                         )}
@@ -264,33 +298,39 @@ function settingsPage(
             <h2>YouTube Music uploads</h2>
           </div>
           <div class="section-body">
-            {tokens.length === 0 ? (
+            {uploadTokens.length === 0 ? (
               <p class="muted">
                 No upload token. Issue one and store it as UPLOAD_TOKEN in your
                 GitHub Action's secrets.
               </p>
             ) : (
-              <ul class="rows">
-                {tokens.map((token) => (
-                  <li key={token.id}>
-                    <span class="track">
-                      <b>
-                        <code>…{token.hint}</code>
-                      </b>
-                      <small>
-                        created {dayText(token.created_at)} · last used{" "}
-                        {dayText(token.last_used_at)}
-                      </small>
-                    </span>
-                    <form method="post" action="/settings/tokens/revoke">
-                      <input type="hidden" name="id" value={token.id} />
-                      <button type="submit">Revoke</button>
-                    </form>
-                  </li>
-                ))}
-              </ul>
+              tokenList(uploadTokens)
             )}
             <form method="post" action="/settings/tokens">
+              <input type="hidden" name="kind" value="ytmusic" />
+              <button type="submit">Issue a new token</button>
+            </form>
+          </div>
+        </section>
+        <section class="section">
+          <div class="section-head">
+            <h2>Phone scrobbler</h2>
+          </div>
+          <div class="section-body">
+            <p class="muted">
+              Install Pano Scrobbler on your Android phone.
+              <br />
+              Add a ListenBrainz account with server {origin} and this token.
+              <br />
+              Every play your phone reports appears on your profile.
+            </p>
+            {scrobblerTokens.length === 0 ? (
+              <p class="muted">No scrobbler token.</p>
+            ) : (
+              tokenList(scrobblerTokens)
+            )}
+            <form method="post" action="/settings/tokens">
+              <input type="hidden" name="kind" value="listenbrainz" />
               <button type="submit">Issue a new token</button>
             </form>
           </div>
@@ -439,7 +479,8 @@ async function pageData(context: SettingsContext) {
        FROM sources WHERE user_id = ?1 ORDER BY kind, id`,
     ).bind(user.id),
     context.env.DB.prepare(
-      `SELECT tokens.id, tokens.hint, tokens.created_at, tokens.last_used_at
+      `SELECT tokens.id, tokens.hint, tokens.created_at, tokens.last_used_at,
+              sources.kind
        FROM tokens
        JOIN sources ON sources.id = tokens.source_id
        WHERE sources.user_id = ?1 AND tokens.revoked_at IS NULL
@@ -460,7 +501,13 @@ function render(
   status: 200 | 400 = 200,
 ) {
   return context.html(
-    settingsPage(data.user, data.sources, data.tokens, options),
+    settingsPage(
+      data.user,
+      data.sources,
+      data.tokens,
+      options,
+      new URL(context.req.url).origin,
+    ),
     status,
   );
 }
@@ -492,10 +539,15 @@ settingsApp.use("*", async (context, next) => {
 settingsApp.get("/", async (context) => {
   const data = await pageData(context);
   const issued = getCookie(context, "issued-token", "host");
+  const issuedKind = getCookie(context, "issued-token-kind", "host");
   if (issued !== undefined) {
     deleteCookie(context, "issued-token", cookieClear);
+    deleteCookie(context, "issued-token-kind", cookieClear);
   }
-  return render(context, data, { issuedToken: issued });
+  return render(context, data, {
+    issuedToken: issued,
+    issuedKind,
+  });
 });
 
 settingsApp.post("/sign-out", async (context) => {
@@ -554,25 +606,35 @@ settingsApp.post("/sources/remove", async (context) => {
   return context.redirect("/settings", 303);
 });
 
-const ytmusicSourceSql = `SELECT id FROM sources
-  WHERE user_id = ?1 AND kind = 'ytmusic'`;
+const tokenKinds = new Set(["ytmusic", "listenbrainz"]);
+
+const sourceByKindSql = `SELECT id FROM sources
+  WHERE user_id = ?1 AND kind = ?2`;
 
 settingsApp.post("/tokens", async (context) => {
   const user = context.get("user");
   const now = Math.floor(Date.now() / 1000);
   const db = context.env.DB;
+  const kind = await form(context, "kind");
+  if (!tokenKinds.has(kind))
+    return render(
+      context,
+      await pageData(context),
+      { error: "Unknown token kind." },
+      400,
+    );
   await db
     .prepare(
-      `INSERT INTO sources (user_id, kind) VALUES (?1, 'ytmusic')
+      `INSERT INTO sources (user_id, kind) VALUES (?1, ?2)
        ON CONFLICT (user_id, kind) DO NOTHING`,
     )
-    .bind(user.id)
+    .bind(user.id, kind)
     .run();
   const source = await db
-    .prepare(ytmusicSourceSql)
-    .bind(user.id)
+    .prepare(sourceByKindSql)
+    .bind(user.id, kind)
     .first<{ id: number }>();
-  if (source === null) throw new Error("could not create the ytmusic source");
+  if (source === null) throw new Error("could not create the source");
   const token = newUploadToken();
   await db
     .prepare(
@@ -580,6 +642,13 @@ settingsApp.post("/tokens", async (context) => {
     )
     .bind(source.id, await sha256Bytes(token), token.slice(-4), now)
     .run();
+  setCookie(context, "issued-token-kind", kind, {
+    prefix: "host",
+    httpOnly: true,
+    secure: true,
+    sameSite: "Strict",
+    maxAge: 120,
+  });
   setCookie(context, "issued-token", token, {
     prefix: "host",
     httpOnly: true,

@@ -1,5 +1,5 @@
 export const sourceNames: Record<string, string> = {
-  listenbrainz: "ListenBrainz",
+  listenbrainz: "Phone",
   spotify: "Spotify",
   ytmusic: "YouTube Music",
 };

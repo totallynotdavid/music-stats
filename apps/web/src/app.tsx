@@ -7,6 +7,7 @@ import { renderCard, type CardTheme } from "./card";
 import { pullDueSources } from "./cron";
 import { page } from "./layout";
 import { sourceNames } from "./names";
+import { submitListens, validateToken } from "./listenbrainz";
 import { settingsApp, signInPage } from "./settings";
 import { beginSpotify, spotifyCallback } from "./spotify";
 import { uploadPlays } from "./upload";
@@ -252,6 +253,28 @@ app.post(
       context.json({ error: "the body is over the 256 KiB limit" }, 413),
   }),
   uploadPlays,
+);
+
+// Pano Scrobbler joins the configured server to "1/" and the route name, so a
+// server entered as https://music.rising.sh or .../1 both reach these routes.
+app.on(
+  "POST",
+  ["/1/submit-listens", "/1/1/submit-listens"],
+  bodyLimit({
+    maxSize: 512 * 1024,
+    onError: (context) =>
+      context.json(
+        { code: 413, error: "The body is over the 512 KiB limit." },
+        413,
+      ),
+  }),
+  submitListens,
+);
+
+app.on("GET", ["/1/validate-token", "/1/1/validate-token"], validateToken);
+
+app.all("/1/*", (context) =>
+  context.json({ code: 404, error: "Not found." }, 404),
 );
 
 app.get("/", async (context) => {
