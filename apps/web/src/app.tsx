@@ -16,6 +16,7 @@ import { Stats } from "./ui/stat";
 import { submitListens, validateToken } from "./listenbrainz";
 import { settingsApp, signInPage } from "./settings";
 import { beginSpotify, spotifyCallback } from "./spotify";
+import { playApp } from "./play/routes";
 import { uploadPlays } from "./upload";
 
 const periods: Period[] = ["week", "month", "all"];
@@ -262,6 +263,8 @@ app.get("/auth/spotify", (context) => beginSpotify(context));
 app.get("/auth/spotify/callback", (context) => spotifyCallback(context));
 
 app.route("/settings", settingsApp);
+
+app.route("/play", playApp);
 
 app.get("/u/:path", async (context) => {
   const path = context.req.param("path") ?? "";
