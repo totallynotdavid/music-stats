@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { bodyLimit } from "hono/body-limit";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { csrf } from "hono/csrf";
 import {
@@ -15,10 +14,8 @@ import {
 import { page } from "./layout";
 import { sourceNames } from "./names";
 import type { Env } from "./types";
-import { importPlays, importRemove } from "./import";
 
 const exportPageSize = 1000;
-const importBodyLimit = 1024 * 1024;
 
 const exportScript = `
 const exportAll = document.getElementById("export-all");
@@ -71,21 +68,12 @@ interface ExportRow {
   title: string;
 }
 
-const sourceKinds = ["listenbrainz", "lastfm"] as const;
-
-const importSourceNames: Record<string, string> = {
-  spotify_import: "spotify",
-  ytmusic_import: "ytmusic",
-};
-
 function dayText(timestamp: number | null) {
   if (timestamp === null) return "never";
   return new Date(timestamp * 1000).toISOString().slice(0, 10);
 }
 
-function sourceStatus(source: SourceInfo, lastFmApproved: boolean) {
-  if (source.kind === "lastfm" && !lastFmApproved)
-    return "waiting for Last.fm approval";
+function sourceStatus(source: SourceInfo) {
   if (source.status === "gap")
     return "uploads lost touch; plays between the last aligned upload and the next one may be missing";
   if (source.status === "error")
@@ -107,9 +95,9 @@ export function signInPage() {
         <div class="page-head">
           <h1>Sign in</h1>
           <p>
-            Music stats stores the plays you connect from ListenBrainz, Last.fm,
-            YouTube Music and Spotify. It shows your top tracks, top artists and
-            plays per day on a public page at <code>/u/name</code>.
+            Music stats stores the plays you connect from ListenBrainz and
+            YouTube Music. It shows your top tracks, top artists and plays per
+            day on a public page at <code>/u/name</code>.
           </p>
         </div>
         <div class="stack">
@@ -138,9 +126,9 @@ function settingsPage(
   user: SignedInUser,
   sources: SourceInfo[],
   tokens: TokenInfo[],
-  options: PageOptions & { lastFmApproved: boolean },
+  options: PageOptions,
 ) {
-  const { notice, error, field, issuedToken, lastFmApproved } = options;
+  const { notice, error, field, issuedToken } = options;
   const fieldError = (name: string) =>
     field === name && error ? (
       <p class="form-error" id={`${name}-error`} role="alert">
@@ -155,12 +143,6 @@ function settingsPage(
     <p class="form-error" role="alert">
       <b>Error:</b> {error}
     </p>
-  );
-  const pulledSources = sources.filter(
-    (source) => !(source.kind in importSourceNames),
-  );
-  const importedSources = sources.filter(
-    (source) => source.kind in importSourceNames,
   );
   return page({
     title: "Settings",
@@ -242,20 +224,19 @@ function settingsPage(
             <h2>Sources</h2>
           </div>
           <div class="section-body">
-            {pulledSources.length === 0 ? (
+            {sources.length === 0 ? (
               <p class="muted">
-                No sources connected. Add a ListenBrainz or Last.fm account
-                below.
+                No sources connected. Add a ListenBrainz account below.
               </p>
             ) : (
               <ul class="rows">
-                {pulledSources.map((source) => (
+                {sources.map((source) => (
                   <li key={source.id}>
                     <span class="track">
                       <b>{sourceNames[source.kind] ?? source.kind}</b>
                       <small>
                         {source.account ?? "upload token"} ·{" "}
-                        {sourceStatus(source, lastFmApproved)}
+                        {sourceStatus(source)}
                         {sourceNote(source) !== null && (
                           <> · {sourceNote(source)}</>
                         )}
@@ -271,15 +252,7 @@ function settingsPage(
             )}
             <form method="post" action="/settings/sources" class="form-row">
               <div class="field">
-                <label for="source-kind">Service</label>
-                <select id="source-kind" name="kind">
-                  {sourceKinds.map((kind) => (
-                    <option value={kind}>{sourceNames[kind]}</option>
-                  ))}
-                </select>
-              </div>
-              <div class="field">
-                <label for="source-account">Username</label>
+                <label for="source-account">ListenBrainz username</label>
                 {fieldError("source")}
                 <input
                   id="source-account"
@@ -296,8 +269,8 @@ function settingsPage(
               </div>
             </form>
             <small class="hint">
-              The service reads the public ListenBrainz or Last.fm history of
-              the account you name.
+              The service reads the public listen history of the account you
+              name.
             </small>
           </div>
         </section>
@@ -335,50 +308,6 @@ function settingsPage(
             <form method="post" action="/settings/tokens">
               <button type="submit">Issue a new token</button>
             </form>
-          </div>
-        </section>
-        <section class="section">
-          <div class="section-head">
-            <h2>Import history</h2>
-          </div>
-          <div class="section-body">
-            <p class="muted">
-              Import Spotify extended streaming history or the watch history of
-              a Google Takeout export. The browser reads the files and sends the
-              plays in small batches. The files stay on this device.
-            </p>
-            <div class="field">
-              <label for="import-files">History files</label>
-              <small>
-                JSON files only. Unzip the export first. A Spotify file is a
-                Streaming_History_Audio file. A Takeout file is
-                watch-history.json.
-              </small>
-              <input id="import-files" type="file" accept=".json" multiple />
-            </div>
-            <div>
-              <button id="import-start" type="button">
-                Start the import
-              </button>
-            </div>
-            <p id="import-status" role="status"></p>
-            <ul class="rows" id="import-sources">
-              {importedSources.map((source) => (
-                <li key={source.id}>
-                  <span class="track">
-                    <b>{sourceNames[source.kind] ?? source.kind}</b>
-                    <small>last batch {dayText(source.last_ok_at)}</small>
-                  </span>
-                  <button
-                    type="button"
-                    data-import-remove={importSourceNames[source.kind]}
-                  >
-                    Remove
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <script type="module" src="/import.js"></script>
           </div>
         </section>
         <section class="section">
@@ -546,10 +475,7 @@ function render(
   status: 200 | 400 = 200,
 ) {
   return context.html(
-    settingsPage(data.user, data.sources, data.tokens, {
-      lastFmApproved: Boolean(context.env.LASTFM_APPROVAL),
-      ...options,
-    }),
+    settingsPage(data.user, data.sources, data.tokens, options),
     status,
   );
 }
@@ -628,36 +554,29 @@ settingsApp.post("/profile", async (context) => {
 
 settingsApp.post("/sources", async (context) => {
   const user = context.get("user");
-  const kind = await form(context, "kind");
   const account = await form(context, "account");
   const data = await pageData(context);
-  if (
-    !sourceKinds.includes(kind as (typeof sourceKinds)[number]) ||
-    !/^\S{1,100}$/.test(account)
-  )
+  if (!/^\S{1,100}$/.test(account))
     return render(
       context,
       data,
-      {
-        error: "Pick a service and enter the account name.",
-        field: "source",
-      },
+      { error: "Enter the ListenBrainz username.", field: "source" },
       400,
     );
   const now = Math.floor(Date.now() / 1000);
   try {
     await context.env.DB.prepare(
       `INSERT INTO sources (user_id, kind, account, next_pull_at)
-       VALUES (?1, ?2, ?3, ?4)`,
+       VALUES (?1, 'listenbrainz', ?2, ?3)`,
     )
-      .bind(user.id, kind, account, now)
+      .bind(user.id, account, now)
       .run();
   } catch {
     return render(
       context,
       data,
       {
-        error: `A ${sourceNames[kind]} source is already connected.`,
+        error: "A ListenBrainz source is already connected.",
         field: "source",
       },
       400,
@@ -718,21 +637,6 @@ settingsApp.post("/tokens", async (context) => {
   });
   return context.redirect("/settings", 303);
 });
-
-const tooLarge = (context: SettingsContext) =>
-  context.json({ error: "the body is over the 1 MiB limit" }, 413);
-
-settingsApp.post(
-  "/import",
-  bodyLimit({ maxSize: importBodyLimit, onError: tooLarge }),
-  importPlays,
-);
-
-settingsApp.post(
-  "/import/remove",
-  bodyLimit({ maxSize: importBodyLimit, onError: tooLarge }),
-  importRemove,
-);
 
 settingsApp.post("/tokens/revoke", async (context) => {
   const user = context.get("user");

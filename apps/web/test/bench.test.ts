@@ -3,13 +3,11 @@ import * as v from "valibot";
 import { beforeEach, describe, it } from "vitest";
 import migrations from "virtual:web-migrations";
 import { getStats } from "../src/aggregate";
-import { pullLastFm, type LastFmTrack } from "../src/lastfm";
 import { pullListenBrainz } from "../src/listenbrainz";
 import { resolvePageTracks } from "../src/matching";
 import { normalizeText } from "../src/normalize";
 // @ts-expect-error vite ?raw import
 import fixtureRaw from "./fixtures/listens-rob.json?raw";
-import lastFmFixture from "./fixtures/recenttracks";
 
 const ListenSchema = v.object({
   listened_at: v.number(),
@@ -213,87 +211,6 @@ describe("bench", () => {
     console.log("stringify newTracks:", stringifyNew.toFixed(2), "ms");
     console.log("stringify listens :", stringifyListens.toFixed(2), "ms");
     console.log("pull new (fake D1):", pullFake.toFixed(2), "ms");
-    console.log("pull stored(fakeD1):", pullFakeStored.toFixed(2), "ms");
-    console.log("pull new (real D1):", pullRealNew.toFixed(2), "ms");
-    console.log("pull stored(realD1):", pullRealStored.toFixed(2), "ms");
-  });
-
-  it("reports Last.fm page timings", async () => {
-    const tracks = lastFmFixture.recenttracks.track
-      .filter((track) => "date" in track)
-      .slice(0, 200) as LastFmTrack[];
-    const fmSource = {
-      id: 10,
-      user_id: 1,
-      kind: "lastfm",
-      account: "fixture",
-      cursor: null,
-      backfill_before: null,
-      gap_before: null,
-      gap_floor: null,
-      next_pull_at: now,
-      idle_pulls: 0,
-    };
-    const fmFetcher = async (url: string) => {
-      const params = new URL(url).searchParams;
-      if (params.has("to"))
-        return { status: 200, body: { recenttracks: { track: [] } } };
-      const limit = Number(params.get("limit"));
-      return {
-        status: 200,
-        body: { recenttracks: { track: tracks.slice(0, limit) } },
-      };
-    };
-    const fakeEnv = { DB: fakeDb(), LASTFM_API_KEY: "bench" } as any;
-    const pullFakeNew = await timeAsync(async () =>
-      pullLastFm(fakeEnv, { ...fmSource }, fmFetcher, now, 0),
-    );
-    const resolution = resolvePageTracks(
-      tracks.map((track) => ({
-        kind: "lastfm",
-        sourceKey: `${track.artist["#text"]}\t${track.name}`,
-        artist: track.artist["#text"],
-        title: track.name,
-        mbid: track.mbid || undefined,
-        listenedAt: Number(track.date?.uts ?? 0),
-        userId: 1,
-        sourceId: 10,
-      })),
-      new Map(),
-      [],
-    );
-    const aliasRows = resolution.listens.map((listen: any, index: number) => ({
-      source_key: listen.sourceKey,
-      id: index + 1,
-      key: listen.trackKey,
-      mbid: null,
-      isrc: null,
-      artistKey: "a",
-      titleKey: "t",
-    }));
-    const fakeStoredEnv = {
-      DB: fakeDb(aliasRows),
-      LASTFM_API_KEY: "bench",
-    } as any;
-    const pullFakeStored = await timeAsync(async () =>
-      pullLastFm(fakeStoredEnv, { ...fmSource }, fmFetcher, now, 0),
-    );
-
-    env.LASTFM_API_KEY = "test-key";
-    const pullRealNew = await timeAsync(
-      async () => pullLastFm(env as any, { ...fmSource }, fmFetcher, now, 0),
-      3,
-    );
-    const stored = await env.DB.prepare(
-      "SELECT * FROM sources WHERE id = 10",
-    ).first<any>();
-    const pullRealStored = await timeAsync(
-      async () => pullLastFm(env as any, stored, fmFetcher, now + 900, 0),
-      3,
-    );
-
-    console.log("=== lastfm bench: page of", tracks.length, "tracks ===");
-    console.log("pull new (fake D1):", pullFakeNew.toFixed(2), "ms");
     console.log("pull stored(fakeD1):", pullFakeStored.toFixed(2), "ms");
     console.log("pull new (real D1):", pullRealNew.toFixed(2), "ms");
     console.log("pull stored(realD1):", pullRealStored.toFixed(2), "ms");
